@@ -42,7 +42,7 @@ import {
   signInStudent,
   getStudentSession,
   signOutStudent,
-} from "./studentStore.js";
+} from "./studentStore";
 
 // ── Assertions ────────────────────────────────────────────────────────────────
 

@@ -3,7 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Target, Eye, Zap, Cpu, Sparkles, Brain, Code, Shield } from "lucide-react";
 import logoFull from "@/assets/logo-full.png";
-import Carousel, { CarouselItemData } from "@/components/ui/Carousel";
+import Carousel, { CarouselItemData } from "@/components/ui/carousel";
 
 const aboutCarouselItems: CarouselItemData[] = [
   {
