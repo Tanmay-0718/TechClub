@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
+import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
-import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/lib/authContext';
 import { trackPageView } from '@/lib/activityTracker';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Lock, Mail, ArrowRight, ArrowLeft, ShieldCheck, Sparkles } from 'lucide-react';
+import { Loader2, Lock, Mail, ArrowRight, ShieldCheck, Sparkles } from 'lucide-react';
 
 export const Login = () => {
   const [email, setEmail] = useState('');
@@ -56,20 +56,9 @@ export const Login = () => {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col justify-between selection:bg-primary/20">
-      {/* Top Header with TechShastra Logo and Theme Toggle */}
-      <header className="fixed top-0 left-0 right-0 z-50 py-4 px-6 sm:px-10 flex items-center justify-between">
-        <Link to="/" className="flex items-center space-x-3 group shrink-0">
-          <img src="/favicon.ico" alt="TECHSHASTRA Logo" className="w-8 h-8 object-contain group-hover:scale-110 transition-transform duration-300" />
-          <span className="font-heading text-lg tracking-[0.15em] font-light text-foreground group-hover:text-primary transition-colors">
-            TECHSHASTRA
-          </span>
-        </Link>
-        <div className="flex items-center gap-2">
-          <ThemeToggle />
-        </div>
-      </header>
+      <Navbar />
 
-      <main className="flex-1 flex items-center justify-center p-4 sm:p-6 pt-24 pb-20 relative overflow-hidden">
+      <main className="flex-1 flex items-center justify-center p-4 sm:p-6 py-20 relative overflow-hidden">
         {/* Ambient background glows */}
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/10 rounded-full blur-[120px] pointer-events-none" />
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-[120px] pointer-events-none" />
