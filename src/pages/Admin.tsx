@@ -1,0 +1,3438 @@
+/**
+ * Admin Dashboard Page
+ * 
+ * The central management interface for TECHSHASTRA admins.
+ * This page allows managing:
+ * - Projects: Add/Remove technical projects
+ * - Blog: Create and publish articles
+ * - Events: Schedule club activities
+ * - Gallery: Upload campus and event photos
+ * - Research: Manage publications and books
+ * - Super Admin: System-wide visibility toggles and user management
+ * 
+ * It uses local state for form management and persists data via custom stores in src/lib/.
+ */
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import Navbar from "@/components/Navbar";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { LayoutDashboard, FileText, Calendar, Image, Trophy, HelpCircle, MessageSquare, Users, Plus, Trash2, Github, Globe, Terminal, Loader2, Award, Newspaper, Eye, EyeOff, Book, ShieldCheck, LogOut, Ban, UserCheck, UserX, ToggleLeft, ToggleRight, UserPlus, Phone, CalendarDays, Copy, Key, Mail, RotateCcw, ClipboardList, X, Instagram, Linkedin, Twitter, Facebook, Link, Hash, Upload, Download, Activity, Search } from "lucide-react";
+import { api, type BackendMember, type UserActivity, type ActivitySummary } from "@/lib/api";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useToast } from "@/components/ui/use-toast";
+import { parseGitHubUrl } from "@/lib/projectStore";
+import { generateSlug, BlogCategory } from "@/lib/blogStore";
+import { addPublication, deletePublication, getAllPublications, Publication, PublicationType } from "@/lib/publicationStore";
+import { getAdminUsers, blockAdmin, unblockAdmin, getAllPageVisibility, togglePageVisibility, createAdminCredential, getStoredCredentials, deleteAdminCredential, setSuperAdminCredentials, isSuperAdminDefault, type AdminCredential, type PageVisibility, type AdminRole } from "@/lib/adminStore";
+import { addLogEntry, clearLog, getLogEntries, revertEntry, saveCredentialsRaw, type LogEntry } from "@/lib/activityLogStore";
+import { useAdminPresence } from "@/hooks/use-admin-presence";
+import { Badge } from "@/components/ui/badge";
+import CertificateSender from "@/components/CertificateSender";
+import { Switch } from "@/components/ui/switch";
+import { format } from "date-fns";
+import { exportAllData, importAllData, clearAllData, getStorageSize } from "@/lib/dataBackup";
+
+const formatDateSafe = (dateStr?: string, pattern: string = "MMM d, yyyy") => {
+  if (!dateStr) return "TBA";
+  const parsed = new Date(dateStr);
+  if (isNaN(parsed.getTime())) return dateStr;
+  try {
+    return format(parsed, pattern);
+  } catch {
+    return dateStr;
+  }
+};
+// New localStorage-based stores
+import * as eventStore from "@/lib/stores/eventStore";
+import * as achievementStore from "@/lib/stores/achievementStore";
+import * as faqStore from "@/lib/stores/faqStore";
+import * as messageStore from "@/lib/stores/messageStore";
+import * as socialStore from "@/lib/stores/socialStore";
+import type { Event, EventStatus } from "@/lib/stores/eventStore";
+import type { Achievement } from "@/lib/stores/achievementStore";
+import type { FAQ } from "@/lib/stores/faqStore";
+import type { ContactMessage } from "@/lib/stores/messageStore";
+import type { SocialPost } from "@/lib/stores/socialStore";
+// Existing localStorage stores
+import { getAllProjects, fetchProjectsFromBackend, addProject as addProjectLocal, deleteProject as deleteProjectLocal, type Project } from "@/lib/projectStore";
+import { getAllBlogPosts, addBlogPost as addBlogLocal, deleteBlogPost as deleteBlogLocal, updateBlogPost as updateBlogLocal, type BlogPost } from "@/lib/blogStore";
+import { getAllGalleryImages, addGalleryImage as addGalleryLocal, deleteGalleryImage as deleteGalleryLocal, type GalleryImage } from "@/lib/galleryStore";
+import { getAllStudents, updateStudent as updateStudentStore, type StudentProfile } from "@/lib/studentStore";
+
+// ── Shared Configuration ───────────────────────────────────────────────────
+const CATEGORY_LABELS: Record<BlogCategory, string> = {
+  blog: "Blog",
+  news: "News",
+  announcement: "Announcement",
+};
+
+const CATEGORY_COLORS: Record<BlogCategory, string> = {
+  blog: "default",
+  news: "secondary",
+  announcement: "outline",
+};
+
+interface AdminProps {
+  userRole: AdminRole;
+}
+
+// ── Change Super Admin Credentials Card ───────────────────────────────────────
+
+const ChangeSuperAdminCard = ({
+  actor,
+  onChanged,
+}: {
+  actor: string;
+  onChanged: () => void;
+}) => {
+  const { toast } = useToast();
+  const [name, setName]       = useState("");
+  const [mobile, setMobile]   = useState("");
+  const [dob, setDob]         = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [open, setOpen]       = useState(false);
+
+  const isDefault = isSuperAdminDefault();
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !mobile.trim() || !dob) {
+      toast({ title: "All fields required", variant: "destructive" }); return;
+    }
+    if (name.trim().toLowerCase() !== confirm.trim().toLowerCase()) {
+      toast({ title: "Name confirmation doesn't match", variant: "destructive" }); return;
+    }
+    setSuperAdminCredentials(name.trim(), mobile.trim(), dob);
+    addLogEntry({ actor, action: "Changed super admin credentials", type: "create_credential", revertible: false });
+    toast({ title: "Super admin credentials updated ✓", description: "Use your new Name + Mobile + DOB to log in next time." });
+    setName(""); setMobile(""); setDob(""); setConfirm(""); setOpen(false);
+    onChanged();
+  };
+
+  return (
+    <Card className={isDefault ? "border-amber-500/40 bg-amber-500/5" : "border-primary/20"}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Key className="w-4 h-4 text-amber-500" />
+          Super Admin Credentials
+          {isDefault && (
+            <Badge variant="outline" className="text-amber-600 border-amber-500/40 text-[10px] ml-1">
+              ⚠ Default — change now
+            </Badge>
+          )}
+        </CardTitle>
+        <CardDescription>
+          Change the Name, Mobile, and Date of Birth used to log in as Super Admin.
+          {isDefault && " Default credentials are insecure — update them immediately."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!open ? (
+          <Button variant={isDefault ? "default" : "outline"} size="sm"
+            className="gap-2" onClick={() => setOpen(true)}>
+            <Key className="w-3.5 h-3.5" />
+            {isDefault ? "Set New Credentials (Required)" : "Change Credentials"}
+          </Button>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4 max-w-md">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Full Name</Label>
+                <Input value={name} onChange={e => setName(e.target.value)} placeholder="New name" required autoComplete="off" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Mobile</Label>
+                <Input value={mobile} onChange={e => setMobile(e.target.value)} placeholder="10-digit" required autoComplete="off" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Date of Birth</Label>
+                <Input type="date" value={dob} onChange={e => setDob(e.target.value)} required />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Confirm — re-type your name</Label>
+              <Input value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Type name again" required autoComplete="off" />
+            </div>
+            <div className="flex gap-2">
+              <Button type="submit" size="sm">Save New Credentials</Button>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+            </div>
+          </form>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+// ── Students Tab ──────────────────────────────────────────────────────────────
+
+const StudentsTab = () => {
+  const [students, setStudents] = useState<StudentProfile[]>(() => getAllStudents());
+  const { toast } = useToast();
+
+  const toggleActive = (s: StudentProfile) => {
+    const updated = updateStudentStore(s.id, { is_active: !s.is_active });
+    if (updated) {
+      setStudents((prev) => prev.map((x) => (x.id === s.id ? updated : x)));
+      toast({ title: updated.is_active ? `${s.name} reactivated` : `${s.name} deactivated` });
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <Card className="border-primary/20 bg-primary/5">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Users className="w-5 h-5 text-primary" /> Registered Students
+          </CardTitle>
+          <CardDescription>{students.length} members · deactivating hides the profile from other students</CardDescription>
+        </CardHeader>
+      </Card>
+
+      {students.length === 0 ? (
+        <Card><CardContent className="py-12 text-center text-muted-foreground font-light">No students have signed up yet.</CardContent></Card>
+      ) : (
+        <div className="grid gap-3">
+          {students.map((s) => (
+            <Card key={s.id} className={`border-primary/10 transition-opacity ${s.is_active ? "" : "opacity-60"}`}>
+              <CardContent className="py-4 flex items-center gap-4 flex-wrap">
+                <img
+                  src={`https://avatars.githubusercontent.com/${s.githubUsername}?s=40`}
+                  alt={s.name}
+                  className="w-10 h-10 rounded-xl ring-2 ring-primary/20 flex-shrink-0 object-cover"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-sm">{s.name}</span>
+                    <Badge variant={s.is_active ? "default" : "destructive"} className="text-[10px] font-light">
+                      {s.is_active ? "Active" : "Inactive"}
+                    </Badge>
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-0.5 flex flex-wrap gap-3">
+                    <span>{s.email}</span>
+                    <span>@{s.githubUsername}</span>
+                    {s.course && <span>{s.course}{s.year ? ` · ${s.year}` : ""}</span>}
+                    <span>Joined {new Date(s.created_at).toLocaleDateString()}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <a href={`/members/${s.githubUsername}`} target="_blank" rel="noopener noreferrer">
+                    <Button size="sm" variant="outline" className="rounded-full gap-1 text-xs">
+                      <Github className="w-3 h-3" /> View
+                    </Button>
+                  </a>
+                  <Button
+                    size="sm"
+                    variant={s.is_active ? "destructive" : "outline"}
+                    className="rounded-full text-xs"
+                    onClick={() => toggleActive(s)}
+                  >
+                    {s.is_active ? <><UserX className="w-3 h-3 mr-1" />Deactivate</> : <><UserCheck className="w-3 h-3 mr-1" />Reactivate</>}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const Admin = ({ userRole }: AdminProps) => {
+  const { toast } = useToast();
+  const navigate = useNavigate();
+  const isSuperAdmin = userRole === "super_admin";
+  const [activeTab, setActiveTab] = useState("overview");
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUserName, setCurrentUserName] = useState("Admin");
+
+  // Get current user info on mount - using sessionStorage from custom auth
+  useEffect(() => {
+    const raw = sessionStorage.getItem("ts_admin_session");
+    if (raw) {
+      try {
+        const session = JSON.parse(raw);
+        setCurrentUserId(session.role); // Use role as ID for presence
+        setCurrentUserName(session.name || "Admin");
+      } catch (_e) {
+        setCurrentUserName("Admin");
+      }
+    }
+  }, []);
+
+  // Presence tracking (only active when Super Admin or for all admins to broadcast)
+  const { onlineAdmins, activityLog, broadcastAction: trackAction } = useAdminPresence(
+    currentUserId,
+    currentUserName,
+    activeTab
+  );
+
+  // ── Projects state ──────────────────────────────────────────────────────────
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [isFetching, setIsFetching] = useState(false);
+  const [formData, setFormData] = useState<{
+    title: string;
+    description: string;
+    github: string;
+    image: string;
+    tags: string;
+    lead: string;
+    designer: string;
+    status: "Completed" | "In Progress";
+    language: "javascript" | "python" | "other";
+  }>({
+    title: "",
+    description: "",
+    github: "",
+    image: "",
+    tags: "",
+    lead: "",
+    designer: "",
+    status: "Completed",
+    language: "javascript"
+  });
+
+  // ── Blog state ───────────────────────────────────────────────────────────────
+  const [blogPosts, setBlogPosts] = useState<BlogPost[]>([]);
+  const [blogForm, setBlogForm] = useState<{
+    title: string;
+    slug: string;
+    excerpt: string;
+    content: string;
+    image_url: string;
+    category: BlogCategory;
+    author: string;
+    published: boolean;
+  }>({
+    title: "",
+    slug: "",
+    excerpt: "",
+    content: "",
+    image_url: "",
+    category: "blog",
+    author: "",
+    published: true,
+  });
+  const [slugManuallyEdited, setSlugManuallyEdited] = useState(false);
+
+  // ── Gallery state ────────────────────────────────────────────────────────────
+  const [galleryImages, setGalleryImages] = useState<GalleryImage[]>([]);
+  const [galleryForm, setGalleryForm] = useState<{
+    title: string;
+    description: string;
+    image_url: string;
+  }>({
+    title: "",
+    description: "",
+    image_url: "",
+  });
+
+  // ── Publications state ───────────────────────────────────────────────────────
+  const [publications, setPublications] = useState<Publication[]>([]);
+  const [pubForm, setPubForm] = useState<{
+    title: string;
+    authors: string;
+    description: string;
+    type: PublicationType;
+    link_url: string;
+    file_url: string;
+  }>({
+    title: "",
+    authors: "",
+    description: "",
+    type: "paper",
+    link_url: "",
+    file_url: "",
+  });
+
+  // ── Events state ─────────────────────────────────────────────────────────────
+  const [events, setEvents] = useState<Event[]>([]);
+  const [eventForm, setEventForm] = useState<{
+    title: string;
+    description: string;
+    date: string;
+    location: string;
+    image_url: string;
+    status: EventStatus;
+  }>({
+    title: "",
+    description: "",
+    date: format(new Date(), "yyyy-MM-dd"),
+    location: "Main Campus",
+    image_url: "",
+    status: "upcoming",
+  });
+
+  // ── Achievements state ───────────────────────────────────────────────────────
+  const [achievements, setAchievements] = useState<Achievement[]>([]);
+  const [achievementForm, setAchievementForm] = useState<{
+    title: string;
+    description: string;
+    date: string;
+    image_url: string;
+  }>({
+    title: "",
+    description: "",
+    date: format(new Date(), "yyyy-MM-dd"),
+    image_url: "",
+  });
+
+  // ── FAQ state ────────────────────────────────────────────────────────────────
+  const [faqs, setFaqs] = useState<FAQ[]>([]);
+  const [faqForm, setFaqForm] = useState<{
+    question: string;
+    answer: string;
+    category: string;
+  }>({
+    question: "",
+    answer: "",
+    category: "General",
+  });
+
+  // ── Socials state ───────────────────────────────────────────────────────────
+  const [socialPosts, setSocialPosts] = useState<SocialPost[]>([]);
+  const [socialForm, setSocialForm] = useState<{
+    platform: string;
+    post_url: string;
+    content: string;
+    image_url: string;
+    username: string;
+  }>({
+    platform: "instagram",
+    post_url: "",
+    content: "",
+    image_url: "",
+    username: "",
+  });
+  const [isFetchingSocial, setIsFetchingSocial] = useState(false);
+
+  // ── Messages state ──────────────────────────────────────────────────────────
+  const [messages, setMessages] = useState<ContactMessage[]>([]);
+
+  // ── Super Admin state ─────────────────────────────────────────────────────────
+  const [adminUsers, setAdminUsers] = useState<AdminCredential[]>([]);
+  const [pages, setPages] = useState<PageVisibility[]>([]);
+  const [newAdminEmail, setNewAdminEmail] = useState("");
+  const [blockReason, setBlockReason] = useState("");
+  const [superAdminLoading, setSuperAdminLoading] = useState(false);
+  // credential list is kept in state so changes re-render without page refresh
+  const [credsList, setCredsList] = useState(() => getStoredCredentials());
+  // persistent activity log
+  const [logEntries, setLogEntries] = useState<LogEntry[]>(() => getLogEntries());
+
+  // ── Backend Member Management & Activity Telemetry ──────────────────────────
+  const [backendMembers, setBackendMembers] = useState<BackendMember[]>([]);
+  const [telemetryActivities, setTelemetryActivities] = useState<UserActivity[]>([]);
+  const [telemetrySummary, setTelemetrySummary] = useState<ActivitySummary | null>(null);
+  const [telemetryLoading, setTelemetryLoading] = useState(false);
+  const [memberSearchQuery, setMemberSearchQuery] = useState("");
+  const [activityActionFilter, setActivityActionFilter] = useState("all");
+
+  const loadBackendAdminData = async () => {
+    try {
+      setTelemetryLoading(true);
+      const [mRes, aRes, sRes] = await Promise.all([
+        api.getAdminMembers().catch(() => ({ members: [], total: 0, page: 1, limit: 25 })),
+        api.getActivityFeed({ limit: 100 }).catch(() => ({ activities: [], total: 0, page: 1, limit: 100 })),
+        api.getAdminDashboard().catch(() => null),
+      ]);
+      setBackendMembers(mRes.members || []);
+      setTelemetryActivities(aRes.activities || []);
+      setTelemetrySummary(sRes);
+    } catch (e) {
+      console.error("Failed to load telemetry:", e);
+    } finally {
+      setTelemetryLoading(false);
+    }
+  };
+
+  const handleRoleChange = async (memberId: string, newRole: string) => {
+    try {
+      await api.updateMemberRole(memberId, newRole);
+      setBackendMembers(prev => prev.map(m => m.id === memberId ? { ...m, role: newRole } : m));
+      toast({ title: "Role Updated", description: `Member role set to ${newRole}` });
+    } catch (err: any) {
+      toast({ title: "Failed to update role", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const handleToggleBan = async (memberId: string, currentBan: boolean) => {
+    try {
+      await api.toggleMemberBan(memberId, !currentBan);
+      setBackendMembers(prev => prev.map(m => m.id === memberId ? { ...m, banned: !currentBan } : m));
+      toast({
+        title: !currentBan ? "User Suspended" : "User Reactivated",
+        description: !currentBan ? "Account access has been suspended." : "Account access has been restored.",
+      });
+    } catch (err: any) {
+      toast({ title: "Failed to update status", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const refreshCredsAndLog = () => {
+    setCredsList(getStoredCredentials());
+    setLogEntries(getLogEntries());
+  };
+
+  // ── Init ─────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    setPublications(getAllPublications());
+    loadSupabaseData();
+    loadBackendAdminData();
+    if (isSuperAdmin) {
+      loadSuperAdminData();
+    }
+  }, []);
+
+  const loadSupabaseData = async () => {
+    try {
+      const [evts, achs, fqs, msgs, projs, posts, imgs, socials] = await Promise.all([
+        eventStore.getEvents(),
+        achievementStore.getAchievements(),
+        faqStore.getFAQs(),
+        messageStore.getMessages(),
+        fetchProjectsFromBackend(),
+        Promise.resolve(getAllBlogPosts()),
+        Promise.resolve(getAllGalleryImages()),
+        socialStore.getSocialPosts(),
+      ]);
+      setEvents(evts);
+      setAchievements(achs);
+      setFaqs(fqs);
+      setMessages(msgs);
+      setProjects(projs);
+      setBlogPosts(posts);
+      setGalleryImages(imgs);
+      setSocialPosts(socials);
+    } catch (err: any) {
+      console.error("Failed to load data", err);
+    }
+  };
+
+  const loadSuperAdminData = async () => {
+    setSuperAdminLoading(true);
+    const [users, pageData] = await Promise.all([
+      getAdminUsers(),
+      getAllPageVisibility(),
+    ]);
+    setAdminUsers(users);
+    setPages(pageData);
+    setSuperAdminLoading(false);
+  };
+
+  const handleRemoveAdmin = async (userId: string, name?: string) => {
+    deleteAdminCredential(userId);
+    setAdminUsers(prev => prev.filter(u => u.id !== userId));
+    toast({ title: "Admin Removed", description: `${name || "User"} has been removed from admin roster.` });
+  };
+
+  const handleBlockAdmin = async (userId: string, name?: string) => {
+    blockAdmin(userId, blockReason || undefined);
+    setAdminUsers(prev => prev.map(u => u.id === userId ? { ...u, is_blocked: true, block_reason: blockReason || undefined } : u));
+    setBlockReason("");
+    toast({ title: "Admin Blocked", description: `${name || "User"} has been blocked from accessing the admin panel.` });
+  };
+
+  const handleUnblockAdmin = async (userId: string, name?: string) => {
+    unblockAdmin(userId);
+    setAdminUsers(prev => prev.map(u => u.id === userId ? { ...u, is_blocked: false, block_reason: undefined } : u));
+    toast({ title: "Admin Unblocked", description: `${name || "User"} can now access the admin panel again.` });
+  };
+
+  const handleTogglePage = async (page: PageVisibility) => {
+    await togglePageVisibility(page.id);
+    setPages(prev => prev.map(p => p.id === page.id ? { ...p, is_visible: !p.is_visible } : p));
+    toast({ title: page.is_visible ? "Page Hidden" : "Page Visible", description: `${page.page_name} is now ${page.is_visible ? "hidden from" : "visible to"} visitors.` });
+  };
+
+  // ── Project helpers ──────────────────────────────────────────────────────────
+  const generateProjectImage = (title: string, description: string, tags: string) => {
+    const encodedTitle = encodeURIComponent(title.slice(0, 60));
+    const encodedText = encodeURIComponent((description || tags || 'A TECHSHASTRA project').slice(0, 100));
+    return `https://og.tailgraph.com/og?fontFamily=Inter&title=${encodedTitle}&text=${encodedText}&bgColor=0f172a&titleColor=a855f7&textColor=94a3b8&bgImage=&logoText=TECHSHASTRA`;
+  };
+
+  const fetchRepoMetadata = async (url: string) => {
+    const gitInfo = parseGitHubUrl(url);
+    if (!gitInfo) {
+      toast({
+        title: "Invalid GitHub URL",
+        description: "Please enter a valid GitHub repository URL (e.g., https://github.com/owner/repo).",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setIsFetching(true);
+    const cleanCanonicalUrl = `https://github.com/${gitInfo.owner}/${gitInfo.repo}`;
+
+    try {
+      const [repoRes, readmeRes] = await Promise.all([
+        fetch(`https://api.github.com/repos/${gitInfo.owner}/${gitInfo.repo}`, {
+          headers: { Accept: "application/vnd.github.v3+json" }
+        }),
+        fetch(`https://api.github.com/repos/${gitInfo.owner}/${gitInfo.repo}/readme`, {
+          headers: { Accept: "application/vnd.github.v3+json" }
+        }).catch(() => null),
+      ]);
+
+      if (!repoRes.ok) {
+        if (repoRes.status === 404) {
+          throw new Error("Repository not found. Please verify the URL or ensure the repository is public.");
+        } else if (repoRes.status === 403) {
+          throw new Error("GitHub API rate limit reached. Auto-filled title from URL.");
+        } else {
+          throw new Error(`GitHub API returned status ${repoRes.status}`);
+        }
+      }
+
+      const data = await repoRes.json();
+
+      let readmeDescription = "";
+      if (readmeRes && readmeRes.ok) {
+        try {
+          const readmeData = await readmeRes.json();
+          let decoded = "";
+          try {
+            // Standard safe UTF-8 decoding for Base64 (supports emoji, Devanagari, etc.)
+            const binString = atob(readmeData.content.replace(/\s/g, ""));
+            const bytes = Uint8Array.from(binString, (m) => m.codePointAt(0)!);
+            decoded = new TextDecoder().decode(bytes);
+          } catch {
+            decoded = atob(readmeData.content.replace(/\s/g, ""));
+          }
+
+          const plainText = decoded
+            .replace(/!\[.*?\]\(.*?\)/g, "")
+            .replace(/\[([^\]]*)\]\([^)]+\)/g, "$1")
+            .replace(/#{1,6}\s+.*/g, "")
+            .replace(/https?:\/\/\S+/g, "")
+            .replace(/[`*_~|]/g, "")
+            .replace(/<!--[\s\S]*?-->/g, "")
+            .trim();
+          const firstParagraph = plainText
+            .split(/\n{2,}/)
+            .map(p => p.trim().replace(/\s+/g, " "))
+            .find(p => p.length > 40 && !p.startsWith("-") && !p.startsWith("1."));
+          if (firstParagraph) {
+            readmeDescription = firstParagraph.slice(0, 300);
+          }
+        } catch (readmeErr) {
+          console.warn("Could not parse README content:", readmeErr);
+        }
+      }
+
+      let detectedLang: "javascript" | "python" | "other" = "other";
+      const ghLang = data.language?.toLowerCase() || "";
+      if (["javascript", "typescript", "typescriptreact", "javascriptreact"].includes(ghLang)) {
+        detectedLang = "javascript";
+      } else if (ghLang === "python") {
+        detectedLang = "python";
+      }
+
+      const finalTitle = data.name
+        .replace(/-/g, " ")
+        .replace(/_/g, " ")
+        .replace(/\w\S*/g, (txt: string) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+
+      const finalDescription = readmeDescription || data.description || "";
+      const finalTags = (data.topics && data.topics.length > 0)
+        ? data.topics.join(", ")
+        : (data.language ? data.language : "");
+      const autoImage = generateProjectImage(finalTitle, finalDescription, finalTags);
+
+      setFormData(prev => ({
+        ...prev,
+        github: cleanCanonicalUrl,
+        title: finalTitle,
+        description: finalDescription || prev.description,
+        language: detectedLang,
+        tags: finalTags || prev.tags,
+        image: prev.image || autoImage,
+      }));
+
+      toast({
+        title: "✅ Metadata Fetched",
+        description: `Imported details for "${finalTitle}"${readmeDescription ? " (including README)" : ""}.`
+      });
+    } catch (err: any) {
+      console.warn("Fetch metadata warning:", err);
+
+      // Graceful fallback: Still auto-populate the sanitized URL and title from repo name!
+      const fallbackTitle = gitInfo.repo
+        .replace(/-/g, " ")
+        .replace(/_/g, " ")
+        .replace(/\w\S*/g, (txt: string) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+
+      setFormData(prev => ({
+        ...prev,
+        github: cleanCanonicalUrl,
+        title: prev.title || fallbackTitle,
+      }));
+
+      toast({
+        title: "Fetch Notice",
+        description: err.message || "Could not retrieve full repo details. Auto-populated repository name from URL.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsFetching(false);
+    }
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { id, value } = e.target;
+    setFormData(prev => ({ ...prev, [id]: value }));
+  };
+
+  const handleSelectChange = (id: string, value: string) => {
+    setFormData(prev => ({ ...prev, [id]: value }));
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (!file.type.startsWith('image/')) {
+        toast({ title: "Invalid File", description: "Please upload an image file.", variant: "destructive" });
+        return;
+      }
+      // Compress image via canvas before storing as base64 to avoid localStorage quota issues
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const img = document.createElement('img') as HTMLImageElement;
+        img.onload = () => {
+          const MAX_W = 800;
+          const MAX_H = 450;
+          let { width, height } = img;
+          if (width > MAX_W || height > MAX_H) {
+            const ratio = Math.min(MAX_W / width, MAX_H / height);
+            width = Math.round(width * ratio);
+            height = Math.round(height * ratio);
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+          const compressed = canvas.toDataURL('image/jpeg', 0.7);
+          setFormData(prev => ({ ...prev, image: compressed }));
+          toast({ title: "Image Uploaded", description: "Project preview image compressed and uploaded successfully." });
+        };
+        img.src = reader.result as string;
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.github) {
+      toast({ title: "Missing GitHub URL", description: "Please provide a GitHub repository URL.", variant: "destructive" });
+      return;
+    }
+    const gitInfo = parseGitHubUrl(formData.github);
+    const finalTitle = formData.title || (gitInfo ? gitInfo.repo.replace(/-/g, " ").replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase()) : "Untitled Project");
+
+    try {
+      const newProj = addProjectLocal({
+        title: finalTitle,
+        description: formData.description || "A project by TECHSHASTRA member.",
+        github: formData.github,
+        image: formData.image || generateProjectImage(finalTitle, formData.description || "", formData.tags),
+        tags: formData.tags.split(",").map(t => t.trim()).filter(t => t),
+        team: { lead: formData.lead || "TECHSHASTRA Team", designer: formData.designer || "Design Team" },
+        status: formData.status,
+        language: formData.language
+      });
+
+      setProjects(prev => [newProj, ...prev]);
+      setFormData({ title: "", description: "", github: "", image: "", tags: "", lead: "", designer: "", status: "Completed", language: "javascript" });
+      toast({ title: "Project Added", description: `${newProj.title} has been added successfully.` });
+      trackAction(`Added project: ${newProj.title}`);
+    } catch (err: any) {
+      console.error("Submission failed", err);
+      toast({
+        title: "Submission Failed",
+        description: "An error occurred while saving. Check console for details.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      deleteProjectLocal(id);
+      setProjects(prev => prev.filter(p => p.id !== id));
+      toast({ title: "Project Deleted", description: "The project has been removed." });
+      trackAction("Deleted a project");
+    } catch (err: any) {
+      toast({ title: "Delete Failed", description: "Could not remove project.", variant: "destructive" });
+    }
+  };
+
+  // ── Blog helpers ─────────────────────────────────────────────────────────────
+  const handleBlogInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { id, value } = e.target;
+    if (id === "blog-title") {
+      setBlogForm(prev => ({
+        ...prev,
+        title: value,
+        slug: slugManuallyEdited ? prev.slug : generateSlug(value),
+      }));
+    } else if (id === "blog-slug") {
+      setSlugManuallyEdited(true);
+      setBlogForm(prev => ({ ...prev, slug: value }));
+    } else {
+      const key = id.replace("blog-", "") as keyof typeof blogForm;
+      setBlogForm(prev => ({ ...prev, [key]: value }));
+    }
+  };
+
+  const handleBlogImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (!file.type.startsWith('image/')) {
+        toast({ title: "Invalid File", description: "Please upload an image file.", variant: "destructive" });
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setBlogForm(prev => ({ ...prev, image_url: reader.result as string }));
+        toast({ title: "Image Uploaded", description: "Cover image uploaded successfully." });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleBlogSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!blogForm.title.trim()) {
+      toast({ title: "Missing Title", description: "Please enter a post title.", variant: "destructive" });
+      return;
+    }
+    if (!blogForm.excerpt.trim()) {
+      toast({ title: "Missing Excerpt", description: "Please enter a short excerpt/summary.", variant: "destructive" });
+      return;
+    }
+    if (!blogForm.content.trim()) {
+      toast({ title: "Missing Content", description: "Please enter the post content.", variant: "destructive" });
+      return;
+    }
+    try {
+      const newPost = addBlogLocal({
+        title: blogForm.title.trim(),
+        slug: blogForm.slug || generateSlug(blogForm.title),
+        excerpt: blogForm.excerpt.trim(),
+        content: blogForm.content.trim(),
+        image_url: blogForm.image_url,
+        published: blogForm.published,
+        category: blogForm.category,
+        author: blogForm.author || currentUserName
+      });
+
+      setBlogPosts(prev => [newPost, ...prev]);
+      setBlogForm({ title: "", slug: "", excerpt: "", content: "", image_url: "", category: "blog", author: "", published: true });
+      setSlugManuallyEdited(false);
+      toast({ title: "✅ Post Published!", description: `"${newPost.title}" is now live.` });
+      trackAction(`Published blog: ${newPost.title}`);
+    } catch (err: any) {
+      console.error("Blog submission failed", err);
+      toast({
+        title: "Publish Failed",
+        description: "An error occurred while saving the post.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleBlogDelete = async (id: string) => {
+    try {
+      deleteBlogLocal(id);
+      setBlogPosts(prev => prev.filter(p => p.id !== id));
+      toast({ title: "Post Deleted", description: "The post has been removed." });
+      trackAction("Deleted a blog post");
+    } catch (err: any) {
+      toast({ title: "Delete Failed", description: "Could not remove post.", variant: "destructive" });
+    }
+  };
+
+  const handleTogglePublish = async (post: BlogPost) => {
+    try {
+      updateBlogLocal(post.id, { published: !post.published });
+      setBlogPosts(prev => prev.map(p => p.id === post.id ? { ...p, published: !post.published } : p));
+      toast({ title: post.published ? "Post Unpublished" : "Post Published", description: `"${post.title}" visibility updated.` });
+    } catch (err: any) {
+      toast({ title: "Update Failed", description: "Could not update publish status.", variant: "destructive" });
+    }
+  };
+
+  // ── Gallery helpers ──────────────────────────────────────────────────────────
+  const handleGalleryInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { id, value } = e.target;
+    const key = id.replace("gallery-", "") as keyof typeof galleryForm;
+    setGalleryForm(prev => ({ ...prev, [key]: value }));
+  };
+
+  const handleGalleryImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (!file.type.startsWith('image/')) {
+        toast({ title: "Invalid File", description: "Please upload an image file.", variant: "destructive" });
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setGalleryForm(prev => ({ ...prev, image_url: reader.result as string }));
+        toast({ title: "Image Uploaded", description: "Gallery image uploaded successfully." });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleGallerySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!galleryForm.title.trim()) {
+      toast({ title: "Missing Title", description: "Please enter an image title.", variant: "destructive" });
+      return;
+    }
+    if (!galleryForm.image_url) {
+      toast({ title: "Missing Image", description: "Please upload an image or provide a URL.", variant: "destructive" });
+      return;
+    }
+    try {
+      const newImage = addGalleryLocal({
+        title: galleryForm.title.trim(),
+        description: galleryForm.description.trim(),
+        image_url: galleryForm.image_url,
+      });
+
+      setGalleryImages(prev => [newImage, ...prev]);
+      setGalleryForm({ title: "", description: "", image_url: "" });
+      toast({ title: "✅ Image Added!", description: "The image is now live." });
+      trackAction("Added gallery image");
+    } catch (err: any) {
+      console.error("Gallery upload failed", err);
+      toast({
+        title: "Upload Failed",
+        description: "An error occurred while saving the image.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleGalleryDelete = async (id: string) => {
+    try {
+      deleteGalleryLocal(id);
+      setGalleryImages(prev => prev.filter(img => img.id !== id));
+      toast({ title: "Image Deleted", description: "The image has been removed." });
+      trackAction("Deleted gallery image");
+    } catch (err: any) {
+      toast({ title: "Delete Failed", description: "Could not remove image.", variant: "destructive" });
+    }
+  };
+
+  // ── Publications helpers ────────────────────────────────────────────────────
+  const handlePubInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { id, value } = e.target;
+    const key = id.replace("pub-", "") as keyof typeof pubForm;
+    setPubForm(prev => ({ ...prev, [key]: value }));
+  };
+
+  const handlePubSelectChange = (value: string) => {
+    setPubForm(prev => ({ ...prev, type: value as PublicationType }));
+  };
+
+  const handlePubFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.type !== "application/pdf") {
+        toast({ title: "Invalid File", description: "Please upload a PDF file.", variant: "destructive" });
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setPubForm(prev => ({ ...prev, file_url: reader.result as string }));
+        toast({ title: "File Uploaded", description: "PDF file saved locally." });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handlePubSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pubForm.title.trim() || !pubForm.authors.trim()) {
+      toast({ title: "Missing Fields", description: "Title and Authors are required.", variant: "destructive" });
+      return;
+    }
+    if (!pubForm.link_url && !pubForm.file_url) {
+      toast({ title: "Missing Resource", description: "Provide either a link or upload a PDF.", variant: "destructive" });
+      return;
+    }
+    try {
+      const newPub = addPublication({
+        title: pubForm.title.trim(),
+        authors: pubForm.authors.trim(),
+        description: pubForm.description.trim(),
+        type: pubForm.type,
+        link_url: pubForm.link_url.trim(),
+        file_url: pubForm.file_url,
+      });
+      setPublications(prev => [newPub, ...prev]);
+      setPubForm({ title: "", authors: "", description: "", type: "paper", link_url: "", file_url: "" });
+      toast({ title: "✅ Publication Added!", description: "It is now visible in the Research & Books section." });
+      trackAction(`Added publication: ${pubForm.title}`);
+    } catch (err: any) {
+      toast({ title: "Save Failed", description: "Could not save the publication.", variant: "destructive" });
+    }
+  };
+
+  const handlePubDelete = (id: string) => {
+    deletePublication(id);
+    setPublications(prev => prev.filter(p => p.id !== id));
+    toast({ title: "Publication Deleted", description: "Removed from the records." });
+    trackAction("Deleted a publication");
+  };
+
+  // ── Events handlers ──────────────────────────────────────────────────────────
+  const handleEventSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!eventForm.title.trim()) {
+      toast({ title: "Missing Title", description: "Event title is required.", variant: "destructive" });
+      return;
+    }
+    try {
+      const newEvent = await eventStore.addEvent({
+        title: eventForm.title.trim(),
+        description: eventForm.description.trim(),
+        event_date: eventForm.date,
+        location: eventForm.location,
+        image_url: eventForm.image_url,
+        status: eventForm.status,
+        featured: false,
+      });
+      setEvents(prev => [newEvent, ...prev]);
+      setEventForm({ title: "", description: "", date: format(new Date(), "yyyy-MM-dd"), location: "Main Campus", image_url: "", status: "upcoming" });
+      toast({ title: "Event Added", description: `"${newEvent.title}" has been scheduled.` });
+      trackAction(`Added event: ${newEvent.title}`);
+    } catch (err: any) {
+      toast({ title: "Error", description: "Failed to add event.", variant: "destructive" });
+    }
+  };
+
+  const handleEventDelete = async (id: string) => {
+    try {
+      await eventStore.deleteEvent(id);
+      setEvents(prev => prev.filter(e => e.id !== id));
+      toast({ title: "Event Deleted", description: "Event has been removed." });
+      trackAction("Deleted an event");
+    } catch (err: any) {
+      toast({ title: "Error", description: "Failed to delete event.", variant: "destructive" });
+    }
+  };
+
+  // ── Achievements handlers ────────────────────────────────────────────────────
+  const handleAchievementSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!achievementForm.title.trim()) {
+      toast({ title: "Missing Title", description: "Achievement title is required.", variant: "destructive" });
+      return;
+    }
+    try {
+      const newAchievement = await achievementStore.addAchievement({
+        title: achievementForm.title.trim(),
+        description: achievementForm.description.trim(),
+        date: achievementForm.date,
+        image_url: achievementForm.image_url,
+      });
+      setAchievements(prev => [newAchievement, ...prev]);
+      setAchievementForm({ title: "", description: "", date: format(new Date(), "yyyy-MM-dd"), image_url: "" });
+      toast({ title: "Achievement Added", description: `"${newAchievement.title}" added to the trophy case.` });
+      trackAction(`Added achievement: ${newAchievement.title}`);
+    } catch (err: any) {
+      toast({ title: "Error", description: "Failed to add achievement.", variant: "destructive" });
+    }
+  };
+
+  const handleAchievementDelete = async (id: string) => {
+    try {
+      await achievementStore.deleteAchievement(id);
+      setAchievements(prev => prev.filter(a => a.id !== id));
+      toast({ title: "Achievement Deleted", description: "Removed from trophy case." });
+      trackAction("Deleted an achievement");
+    } catch (err: any) {
+      toast({ title: "Error", description: "Failed to delete achievement.", variant: "destructive" });
+    }
+  };
+
+  // ── Socials handlers ─────────────────────────────────────────────────────────
+  const fetchSocialMetadata = async (url: string) => {
+    if (!url || !url.includes("http")) return;
+    setIsFetchingSocial(true);
+    try {
+      // Basic detection of platform
+      let platform = "instagram";
+      if (url.includes("linkedin.com")) platform = "linkedin";
+      if (url.includes("twitter.com") || url.includes("x.com")) platform = "twitter";
+      if (url.includes("facebook.com")) platform = "facebook";
+
+      // In a real app, we might call a serverless function here to scrape metadata.
+      // For now, we simulate by parsing the URL for a username and generating a placeholder image.
+      const urlObj = new URL(url);
+      const pathParts = urlObj.pathname.split("/").filter(p => p);
+      const detectedUsername = pathParts[0] || "User";
+
+      setSocialForm(prev => ({
+        ...prev,
+        platform,
+        username: prev.username || detectedUsername,
+        content: prev.content || `New post on ${platform}`,
+        image_url: prev.image_url || `https://source.unsplash.com/featured/?${platform},tech`,
+      }));
+
+      toast({ title: "Link Detected", description: `Identified ${platform} post. Metadata auto-filled.` });
+    } catch (err) {
+      console.error("Failed to parse social URL", err);
+    } finally {
+      setIsFetchingSocial(false);
+    }
+  };
+
+  const handleSocialSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!socialForm.post_url.trim()) {
+      toast({ title: "Missing URL", description: "Social post URL is required.", variant: "destructive" });
+      return;
+    }
+    try {
+      const newPost = await socialStore.addSocialPost({
+        platform: socialForm.platform,
+        post_url: socialForm.post_url.trim(),
+        content: socialForm.content.trim(),
+        image_url: socialForm.image_url,
+        username: socialForm.username.trim(),
+        posted_at: new Date().toISOString(),
+      });
+      setSocialPosts(prev => [newPost, ...prev]);
+      setSocialForm({ platform: "instagram", post_url: "", content: "", image_url: "", username: "" });
+      toast({ title: "Social Post Added", description: "The post is now live on the Socials page." });
+      trackAction(`Added social post: ${newPost.platform}`);
+    } catch (err: any) {
+      toast({ title: "Error", description: "Failed to add social post.", variant: "destructive" });
+    }
+  };
+
+  const handleSocialDelete = async (id: string) => {
+    try {
+      await socialStore.deleteSocialPost(id);
+      setSocialPosts(prev => prev.filter(p => p.id !== id));
+      toast({ title: "Post Deleted", description: "Social post removed." });
+      trackAction("Deleted a social post");
+    } catch (err: any) {
+      toast({ title: "Error", description: "Failed to delete social post.", variant: "destructive" });
+    }
+  };
+
+  // ── FAQ handlers ─────────────────────────────────────────────────────────────
+  const handleFAQSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!faqForm.question.trim() || !faqForm.answer.trim()) {
+      toast({ title: "Missing Fields", description: "Question and Answer are required.", variant: "destructive" });
+      return;
+    }
+    try {
+      const newFAQ = await faqStore.addFAQ({
+        question: faqForm.question.trim(),
+        answer: faqForm.answer.trim(),
+        category: faqForm.category.trim(),
+        order_index: faqs.length,
+      });
+      setFaqs(prev => [...prev, newFAQ]);
+      setFaqForm({ question: "", answer: "", category: "General" });
+      toast({ title: "FAQ Added", description: "Question added to FAQ list." });
+      trackAction("Added FAQ entry");
+    } catch (err: any) {
+      toast({ title: "Error", description: "Failed to add FAQ.", variant: "destructive" });
+    }
+  };
+
+  const handleFAQDelete = async (id: string) => {
+    try {
+      await faqStore.deleteFAQ(id);
+      setFaqs(prev => prev.filter(f => f.id !== id));
+      toast({ title: "FAQ Deleted", description: "Entry removed." });
+      trackAction("Deleted FAQ entry");
+    } catch (err: any) {
+      toast({ title: "Error", description: "Failed to delete FAQ.", variant: "destructive" });
+    }
+  };
+
+  // ── Messages handlers ────────────────────────────────────────────────────────
+  const handleMessageDelete = async (id: string) => {
+    try {
+      await messageStore.deleteMessage(id);
+      setMessages(prev => prev.filter(m => m.id !== id));
+      toast({ title: "Message Deleted", description: "Message removed from inbox." });
+      trackAction("Deleted a message");
+    } catch (err: any) {
+      toast({ title: "Error", description: "Failed to delete message.", variant: "destructive" });
+    }
+  };
+
+  const handleMarkAsRead = async (id: string, read: boolean) => {
+    try {
+      await messageStore.markMessageRead(id, read);
+      setMessages(prev => prev.map(m => m.id === id ? { ...m, read } : m));
+    } catch (err: any) {
+      console.error("Failed to update message status", err);
+    }
+  };
+
+  const publishedBlogCount = blogPosts.filter(p => p.published).length;
+
+  const handleSignOut = () => {
+    sessionStorage.removeItem("ts_admin_session");
+    navigate("/auth", { replace: true });
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5">
+      <Navbar />
+
+      <main className="container mx-auto px-4 py-24">
+        <div className="mb-8 flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-3 mb-2">
+              <h1 className="text-4xl font-bold">Admin Dashboard</h1>
+              <Badge variant={isSuperAdmin ? "default" : "secondary"} className="text-xs">
+                {isSuperAdmin ? "⭐ Super Admin" : "Admin"}
+              </Badge>
+            </div>
+            <p className="text-muted-foreground">Manage your tech club content and settings</p>
+          </div>
+          <Button variant="outline" onClick={handleSignOut} className="gap-2">
+            <LogOut className="w-4 h-4" />
+            Sign Out
+          </Button>
+        </div>
+
+        <Tabs defaultValue="overview" className="space-y-6" onValueChange={setActiveTab}>
+          <TabsList className="flex flex-wrap w-full h-auto bg-muted/50 p-1 gap-1">
+            <TabsTrigger value="overview"><LayoutDashboard className="w-4 h-4 mr-2" />Overview</TabsTrigger>
+            <TabsTrigger value="telemetry" className="bg-primary/10 text-primary">
+              <Activity className="w-4 h-4 mr-2" />Live Telemetry
+            </TabsTrigger>
+            <TabsTrigger value="backend-members">
+              <Users className="w-4 h-4 mr-2 hidden sm:inline" />Club Members ({backendMembers.length})
+            </TabsTrigger>
+            <TabsTrigger value="projects"><FileText className="w-4 h-4 mr-2 hidden sm:inline" />Projects</TabsTrigger>
+            <TabsTrigger value="events"><Calendar className="w-4 h-4 mr-2 hidden sm:inline" />Events</TabsTrigger>
+            <TabsTrigger value="blog"><Newspaper className="w-4 h-4 mr-2 hidden sm:inline" />Blog</TabsTrigger>
+            <TabsTrigger value="gallery"><Image className="w-4 h-4 mr-2 hidden sm:inline" />Gallery</TabsTrigger>
+            <TabsTrigger value="socials"><Hash className="w-4 h-4 mr-2 hidden sm:inline" />Socials</TabsTrigger>
+            <TabsTrigger value="publications"><Book className="w-4 h-4 mr-2 hidden sm:inline" />Research</TabsTrigger>
+            <TabsTrigger value="awards"><Trophy className="w-4 h-4 mr-2 hidden sm:inline" />Awards</TabsTrigger>
+            <TabsTrigger value="faq"><HelpCircle className="w-4 h-4 mr-2 hidden sm:inline" />FAQ</TabsTrigger>
+            <TabsTrigger value="messages"><MessageSquare className="w-4 h-4 mr-2 hidden sm:inline" />Messages</TabsTrigger>
+            <TabsTrigger value="certificates"><Award className="w-4 h-4 mr-2 hidden sm:inline" />Certs</TabsTrigger>
+            <TabsTrigger value="students"><Users className="w-4 h-4 mr-2 hidden sm:inline" />Students</TabsTrigger>
+            {isSuperAdmin && (
+              <TabsTrigger value="super-admin" className="bg-primary/10 text-primary">
+                <ShieldCheck className="w-4 h-4 mr-2" />Super Admin
+              </TabsTrigger>
+            )}
+          </TabsList>
+
+          {/* ── Overview ── */}
+          <TabsContent value="overview">
+            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-sm font-medium">Registered Students</CardTitle>
+                  <Users className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{getAllStudents().filter(s => s.is_active).length}</div>
+                  <p className="text-xs text-muted-foreground">{getAllStudents().length} total · {getAllStudents().filter(s => !s.is_active).length} inactive</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-sm font-medium">Projects</CardTitle>
+                  <FileText className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{projects.length}</div>
+                  <p className="text-xs text-muted-foreground">In showcase</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-sm font-medium">Upcoming Events</CardTitle>
+                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{events.filter(ev => ev.status === "upcoming").length}</div>
+                  <p className="text-xs text-muted-foreground">{events.length} total events</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-sm font-medium">Blog Posts</CardTitle>
+                  <Newspaper className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{publishedBlogCount}</div>
+                  <p className="text-xs text-muted-foreground">{blogPosts.length - publishedBlogCount} drafts</p>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* ── Projects ── */}
+          <TabsContent value="projects">
+            <div className="grid lg:grid-cols-3 gap-6">
+              <Card className="lg:col-span-1 h-fit">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Plus className="w-5 h-5 text-primary" />
+                    Add New Project
+                  </CardTitle>
+                  <CardDescription>Enter GitHub repository details to add a live project.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleSubmit} className="space-y-4">
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="github">GitHub Repository URL</Label>
+                        <div className="flex gap-2">
+                          <div className="relative flex-1">
+                            {isFetching ? (
+                              <Loader2 className="absolute left-3 top-3 w-4 h-4 text-primary animate-spin" />
+                            ) : (
+                              <Github className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
+                            )}
+                            <Input
+                              id="github"
+                              placeholder="https://github.com/user/repo"
+                              className="pl-10 h-11 font-mono text-xs"
+                              value={formData.github}
+                              onChange={handleInputChange}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  if (formData.github) fetchRepoMetadata(formData.github);
+                                }
+                              }}
+                              onPaste={(e) => {
+                                const pasted = e.clipboardData.getData("text");
+                                if (pasted && pasted.includes("github.com")) {
+                                  setTimeout(() => fetchRepoMetadata(pasted), 100);
+                                }
+                              }}
+                            />
+                          </div>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={isFetching || !formData.github.trim()}
+                            onClick={() => fetchRepoMetadata(formData.github)}
+                            className="h-11 px-5 font-mono text-xs"
+                          >
+                            {isFetching ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
+                            Fetch
+                          </Button>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground italic font-light px-1">
+                          * Paste URL or click Fetch to auto-populate details
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="title">Project Title</Label>
+                      <Input id="title" placeholder="Project Name" value={formData.title} onChange={handleInputChange} />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="description">Short Description</Label>
+                      <Textarea id="description" placeholder="What does this project do?" value={formData.description} onChange={handleInputChange} />
+                    </div>
+
+                    <div className="space-y-2 p-4 rounded-lg bg-muted/30 border border-primary/20">
+                      <Label htmlFor="image" className="flex items-center gap-2">
+                        Project Preview Image
+                        <span className="text-[10px] text-muted-foreground font-normal bg-muted px-2 py-0.5 rounded-full">auto-generated if empty</span>
+                      </Label>
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <Input type="file" accept="image/*" onChange={handleImageUpload} className="flex-1" />
+                          <span className="text-xs text-muted-foreground whitespace-nowrap">or</span>
+                        </div>
+                        <Input id="image" placeholder="Paste image URL here" value={formData.image} onChange={handleInputChange} />
+                        {formData.image && (
+                          <div className="relative w-full h-32 rounded-lg overflow-hidden border border-primary/20">
+                            <img
+                              src={formData.image}
+                              alt="Preview"
+                              className="w-full h-full object-cover"
+                              onError={(e) => { (e.target as HTMLImageElement).src = "https://via.placeholder.com/400x200?text=Invalid+Image"; }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Optional — if left blank, an image will be auto-generated from the repo name and description.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="language">Execution Tech</Label>
+                        <Select value={formData.language} onValueChange={(v) => handleSelectChange("language", v)}>
+                          <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="javascript">JS / React (StackBlitz)</SelectItem>
+                            <SelectItem value="python">Python (Pyodide)</SelectItem>
+                            <SelectItem value="other">Other (Static)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="status">Status</Label>
+                        <Select value={formData.status} onValueChange={(v) => handleSelectChange("status", v)}>
+                          <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Completed">Completed</SelectItem>
+                            <SelectItem value="In Progress">In Progress</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="lead">Team Lead</Label>
+                        <Input id="lead" placeholder="Lead name" value={formData.lead} onChange={handleInputChange} />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="designer">UI Designer</Label>
+                        <Input id="designer" placeholder="Designer name" value={formData.designer} onChange={handleInputChange} />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="tags">Tags (comma separated)</Label>
+                      <Input id="tags" placeholder="React, AI, IoT" value={formData.tags} onChange={handleInputChange} />
+                    </div>
+
+                    <Button type="submit" className="w-full">Publish Project</Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              <Card className="lg:col-span-2">
+                <CardHeader>
+                  <CardTitle>Currently Published Projects</CardTitle>
+                  <CardDescription>A list of projects added by admins via this dashboard.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {projects.length === 0 ? (
+                      <div className="text-center py-12 border border-dashed rounded-xl">
+                        <p className="text-muted-foreground italic">No admin-added projects yet.</p>
+                      </div>
+                    ) : (
+                      projects.map((project) => (
+                        <div key={project.id} className="flex items-center justify-between p-4 border rounded-xl hover:bg-primary/5 transition-colors">
+                          <div className="flex items-center gap-4 flex-1">
+                            <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center">
+                              {project.github_url?.includes("python") ? <Terminal className="w-6 h-6 text-primary" /> : <Globe className="w-6 h-6 text-primary" />}
+                            </div>
+                            <div className="flex-1">
+                              <h4 className="font-medium">{project.title}</h4>
+                              <p className="text-xs text-muted-foreground truncate max-w-[300px]">{project.github_url}</p>
+                              <div className="flex gap-2 mt-1">
+                                <Badge variant="default" className="text-[9px] px-2 py-0">
+                                  {project.tech_stack?.[0] || 'Project'}
+                                </Badge>
+                                <Badge variant="outline" className="text-[9px] px-2 py-0 text-green-600 border-green-600">
+                                  Supabase Persistent
+                                </Badge>
+                              </div>
+                            </div>
+                          </div>
+                          <Button variant="ghost" size="icon" onClick={() => handleDelete(project.id)} className="text-destructive hover:bg-destructive/10">
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* ── Events ── */}
+          <TabsContent value="events">
+            <div className="grid lg:grid-cols-5 gap-6">
+              <Card className="lg:col-span-2 h-fit">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Calendar className="w-5 h-5 text-primary" />
+                    Schedule New Event
+                  </CardTitle>
+                  <CardDescription>Add workshops, hackathons or seminars.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleEventSubmit} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="event-title">Event Title *</Label>
+                      <Input
+                        id="event-title"
+                        placeholder="e.g. AI Bootcamp 2025"
+                        value={eventForm.title}
+                        onChange={(e) => setEventForm(prev => ({ ...prev, title: e.target.value }))}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="event-date">Date</Label>
+                        <Input
+                          id="event-date"
+                          type="date"
+                          value={eventForm.date}
+                          onChange={(e) => setEventForm(prev => ({ ...prev, date: e.target.value }))}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="event-status">Status</Label>
+                        <Select value={eventForm.status} onValueChange={(v) => setEventForm(prev => ({ ...prev, status: v as db.EventStatus }))}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="upcoming">Upcoming</SelectItem>
+                            <SelectItem value="ongoing">Ongoing</SelectItem>
+                            <SelectItem value="completed">Completed</SelectItem>
+                            <SelectItem value="cancelled">Cancelled</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="event-location">Location</Label>
+                      <Input
+                        id="event-location"
+                        placeholder="e.g. Seminar Hall A"
+                        value={eventForm.location}
+                        onChange={(e) => setEventForm(prev => ({ ...prev, location: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="event-description">Short Description</Label>
+                      <Textarea
+                        id="event-description"
+                        placeholder="Brief summary of the event..."
+                        rows={3}
+                        value={eventForm.description}
+                        onChange={(e) => setEventForm(prev => ({ ...prev, description: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="event-image">Image URL</Label>
+                      <Input
+                        id="event-image"
+                        placeholder="https://..."
+                        value={eventForm.image_url}
+                        onChange={(e) => setEventForm(prev => ({ ...prev, image_url: e.target.value }))}
+                      />
+                    </div>
+                    <Button type="submit" className="w-full">Create Event</Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              <Card className="lg:col-span-3">
+                <CardHeader>
+                  <CardTitle>Upcoming & Past Events</CardTitle>
+                  <CardDescription>Manage your club's activity calendar.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {events.length === 0 ? (
+                      <div className="text-center py-12 border border-dashed rounded-xl">
+                        <p className="text-muted-foreground italic">No events found in Supabase.</p>
+                      </div>
+                    ) : (
+                      events.map((event) => (
+                        <div key={event.id} className="flex items-center justify-between p-4 border rounded-xl hover:bg-muted/30 transition-colors">
+                          <div className="flex items-center gap-4">
+                            <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                              <Calendar className="w-5 h-5 text-primary" />
+                            </div>
+                            <div>
+                              <h4 className="font-medium text-sm">{event.title}</h4>
+                              <p className="text-xs text-muted-foreground">{formatDateSafe(event.event_date || (event as any).date, "MMM d, yyyy")} • {event.location}</p>
+                              <Badge variant="outline" className="text-[9px] mt-1 h-4">
+                                {event.status.toUpperCase()}
+                              </Badge>
+                            </div>
+                          </div>
+                          <Button variant="ghost" size="icon" onClick={() => handleEventDelete(event.id)} className="text-destructive">
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* ── Blog & News ── */}
+          <TabsContent value="blog">
+            <div className="grid lg:grid-cols-5 gap-6">
+              {/* Add Post Form */}
+              <Card className="lg:col-span-2 h-fit">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Plus className="w-5 h-5 text-primary" />
+                    New Blog / News Post
+                  </CardTitle>
+                  <CardDescription>Write and publish posts that appear on the Blog & News page.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleBlogSubmit} className="space-y-4">
+                    {/* Category */}
+                    <div className="space-y-2">
+                      <Label>Post Type</Label>
+                      <Select value={blogForm.category} onValueChange={(v) => setBlogForm(prev => ({ ...prev, category: v as BlogCategory }))}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="blog">📝 Blog Post</SelectItem>
+                          <SelectItem value="news">📰 News</SelectItem>
+                          <SelectItem value="announcement">📢 Announcement</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Title */}
+                    <div className="space-y-2">
+                      <Label htmlFor="blog-title">Title *</Label>
+                      <Input
+                        id="blog-title"
+                        placeholder="Enter post title..."
+                        value={blogForm.title}
+                        onChange={handleBlogInputChange}
+                      />
+                    </div>
+
+                    {/* Slug */}
+                    <div className="space-y-2">
+                      <Label htmlFor="blog-slug" className="flex items-center gap-2">
+                        URL Slug
+                        <span className="text-[10px] text-muted-foreground font-normal bg-muted px-2 py-0.5 rounded-full">auto-generated</span>
+                      </Label>
+                      <Input
+                        id="blog-slug"
+                        placeholder="url-friendly-slug"
+                        value={blogForm.slug}
+                        onChange={handleBlogInputChange}
+                      />
+                      <p className="text-[10px] text-muted-foreground px-1">
+                        /blog/<span className="text-primary">{blogForm.slug || "your-slug-here"}</span>
+                      </p>
+                    </div>
+
+                    {/* Author */}
+                    <div className="space-y-2">
+                      <Label htmlFor="blog-author">Author Name</Label>
+                      <Input
+                        id="blog-author"
+                        placeholder="TECHSHASTRA Team"
+                        value={blogForm.author}
+                        onChange={handleBlogInputChange}
+                      />
+                    </div>
+
+                    {/* Excerpt */}
+                    <div className="space-y-2">
+                      <Label htmlFor="blog-excerpt">Excerpt / Summary *</Label>
+                      <Textarea
+                        id="blog-excerpt"
+                        placeholder="A short summary shown on the blog listing page..."
+                        rows={2}
+                        value={blogForm.excerpt}
+                        onChange={handleBlogInputChange}
+                      />
+                    </div>
+
+                    {/* Content */}
+                    <div className="space-y-2">
+                      <Label htmlFor="blog-content">Full Content *</Label>
+                      <Textarea
+                        id="blog-content"
+                        placeholder="Write your full post here. Use blank lines to separate paragraphs..."
+                        rows={8}
+                        value={blogForm.content}
+                        onChange={handleBlogInputChange}
+                        className="font-mono text-sm"
+                      />
+                      <p className="text-[10px] text-muted-foreground px-1">
+                        Tip: Leave a blank line between paragraphs for proper formatting.
+                      </p>
+                    </div>
+
+                    {/* Cover Image */}
+                    <div className="space-y-2 p-4 rounded-lg bg-muted/30 border border-primary/20">
+                      <Label className="flex items-center gap-2">
+                        Cover Image
+                        <span className="text-[10px] text-muted-foreground font-normal bg-muted px-2 py-0.5 rounded-full">optional</span>
+                      </Label>
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <Input type="file" accept="image/*" onChange={handleBlogImageUpload} className="flex-1" />
+                          <span className="text-xs text-muted-foreground whitespace-nowrap">or</span>
+                        </div>
+                        <Input
+                          id="blog-image_url"
+                          placeholder="Paste image URL here"
+                          value={blogForm.image_url}
+                          onChange={handleBlogInputChange}
+                        />
+                        {blogForm.image_url && (
+                          <div className="relative w-full h-28 rounded-lg overflow-hidden border border-primary/20">
+                            <img
+                              src={blogForm.image_url}
+                              alt="Cover preview"
+                              className="w-full h-full object-cover"
+                              onError={(e) => { (e.target as HTMLImageElement).src = "https://via.placeholder.com/400x200?text=Invalid+Image"; }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Publish toggle */}
+                    <div className="flex items-center justify-between p-3 rounded-lg border">
+                      <div>
+                        <p className="text-sm font-medium">Publish immediately</p>
+                        <p className="text-xs text-muted-foreground">Toggle off to save as draft</p>
+                      </div>
+                      <Switch
+                        checked={blogForm.published}
+                        onCheckedChange={(v) => setBlogForm(prev => ({ ...prev, published: v }))}
+                      />
+                    </div>
+
+                    <Button type="submit" className="w-full">
+                      {blogForm.published ? "🚀 Publish Post" : "💾 Save as Draft"}
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              {/* Posts List */}
+              <Card className="lg:col-span-3">
+                <CardHeader>
+                  <CardTitle className="flex items-center justify-between">
+                    <span>All Posts</span>
+                    <div className="flex gap-2 text-sm font-normal">
+                      <Badge variant="default">{publishedBlogCount} Published</Badge>
+                      <Badge variant="secondary">{blogPosts.length - publishedBlogCount} Drafts</Badge>
+                    </div>
+                  </CardTitle>
+                  <CardDescription>Manage all blog posts, news, and announcements.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {blogPosts.length === 0 ? (
+                      <div className="text-center py-16 border border-dashed rounded-xl">
+                        <Newspaper className="w-10 h-10 text-muted-foreground mx-auto mb-3 opacity-40" />
+                        <p className="text-muted-foreground italic">No posts yet. Create your first post!</p>
+                      </div>
+                    ) : (
+                      blogPosts.map((post) => (
+                        <div
+                          key={post.id}
+                          className={`flex items-start justify-between p-4 border rounded-xl transition-colors ${post.published ? "hover:bg-primary/5" : "opacity-60 bg-muted/20"}`}
+                        >
+                          <div className="flex gap-3 flex-1 min-w-0">
+                            {post.image_url ? (
+                              <img
+                                src={post.image_url}
+                                alt={post.title}
+                                className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                              />
+                            ) : (
+                              <div className="w-14 h-14 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+                                <FileText className="w-6 h-6 text-primary" />
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap mb-1">
+                                <Badge variant="secondary" className="text-[9px] px-2 py-0">
+                                  Post
+                                </Badge>
+                                {!post.published && (
+                                  <Badge variant="outline" className="text-[9px] px-2 py-0 text-amber-600 border-amber-600">
+                                    Draft
+                                  </Badge>
+                                )}
+                                {post.id.startsWith('sample-') && (
+                                  <Badge variant="outline" className="text-[9px] px-2 py-0 border-blue-400 text-blue-500">
+                                    Sample
+                                  </Badge>
+                                )}
+                              </div>
+                              <h4 className="font-medium text-sm leading-tight truncate">{post.title}</h4>
+                              <p className="text-xs text-muted-foreground truncate mt-0.5">{post.excerpt}</p>
+                              <p className="text-[10px] text-muted-foreground mt-1">
+                                {post.published_at ? format(new Date(post.published_at), "MMM d, yyyy") : "Draft"} · Supabase
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+                            {!post.id.startsWith('sample-') && (
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleTogglePublish(post)}
+                                  className={post.published ? "text-green-600 hover:bg-green-50" : "text-muted-foreground hover:bg-muted"}
+                                  title={post.published ? "Unpublish" : "Publish"}
+                                >
+                                  {post.published ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleBlogDelete(post.id)}
+                                  className="text-destructive hover:bg-destructive/10"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* ── Certificates ── */}
+          {/* ── Publications ── */}
+          <TabsContent value="publications">
+            <div className="grid lg:grid-cols-5 gap-6">
+              {/* Add Publication Form */}
+              <Card className="lg:col-span-2 h-fit">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Book className="w-5 h-5 text-primary" />
+                    Add Research / Book
+                  </CardTitle>
+                  <CardDescription>Share research papers and books with the community.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handlePubSubmit} className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2 col-span-2">
+                        <Label htmlFor="pub-title">Publication Title *</Label>
+                        <Input
+                          id="pub-title"
+                          placeholder="Project name or book title..."
+                          value={pubForm.title}
+                          onChange={handlePubInputChange}
+                        />
+                      </div>
+                      <div className="space-y-2 col-span-2">
+                        <Label htmlFor="pub-authors">Authors *</Label>
+                        <Input
+                          id="pub-authors"
+                          placeholder="List of contributors..."
+                          value={pubForm.authors}
+                          onChange={handlePubInputChange}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="pub-type">Type</Label>
+                      <Select value={pubForm.type} onValueChange={handlePubSelectChange}>
+                        <SelectTrigger id="pub-type">
+                          <SelectValue placeholder="Select type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="paper">Research Paper</SelectItem>
+                          <SelectItem value="book">Book</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="pub-description">Description</Label>
+                      <Textarea
+                        id="pub-description"
+                        placeholder="Abstract or summary..."
+                        rows={3}
+                        value={pubForm.description}
+                        onChange={handlePubInputChange}
+                      />
+                    </div>
+
+                    <div className="space-y-4 p-4 rounded-lg bg-muted/30 border border-primary/10">
+                      <div className="space-y-2">
+                        <Label htmlFor="pub-link_url">External Link</Label>
+                        <Input
+                          id="pub-link_url"
+                          placeholder="https://..."
+                          value={pubForm.link_url}
+                          onChange={handlePubInputChange}
+                        />
+                      </div>
+                      <div className="relative">
+                        <div className="absolute inset-0 flex items-center">
+                          <span className="w-full border-t" />
+                        </div>
+                        <div className="relative flex justify-center text-xs uppercase">
+                          <span className="bg-background px-2 text-muted-foreground">or upload PDF</span>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <Input type="file" accept="application/pdf" onChange={handlePubFileUpload} />
+                        {pubForm.file_url && (
+                          <p className="text-[10px] text-green-600 font-medium">✅ PDF Ready to save</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <Button type="submit" className="w-full">💾 Save Publication</Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              {/* Publications List */}
+              <Card className="lg:col-span-3">
+                <CardHeader>
+                  <CardTitle>Directory</CardTitle>
+                  <CardDescription>Manage published papers and books.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {publications.length === 0 ? (
+                      <div className="text-center py-12 border border-dashed rounded-xl">
+                        <p className="text-muted-foreground italic">No publications yet.</p>
+                      </div>
+                    ) : (
+                      publications.map((pub) => (
+                        <div key={pub.id} className="flex items-start justify-between p-4 rounded-xl border bg-card hover:border-primary/50 transition-all group">
+                          <div className="flex gap-4">
+                            <div className={`w-12 h-12 rounded-lg flex items-center justify-center shrink-0 ${pub.type === 'book' ? 'bg-blue-500/10 text-blue-500' : 'bg-primary/10 text-primary'}`}>
+                              {pub.type === 'book' ? <Book className="w-6 h-6" /> : <FileText className="w-6 h-6" />}
+                            </div>
+                            <div className="min-w-0">
+                              <h4 className="font-semibold text-sm leading-tight text-foreground group-hover:text-primary transition-colors">{pub.title}</h4>
+                              <p className="text-xs text-muted-foreground mt-1 font-medium">{pub.authors}</p>
+                              <p className="text-[11px] text-muted-foreground line-clamp-2 mt-1.5 leading-relaxed">{pub.description}</p>
+                              <div className="flex gap-2 mt-2">
+                                {pub.link_url && (
+                                  <Badge variant="outline" className="text-[9px] h-5">Link Attached</Badge>
+                                )}
+                                {pub.file_url && (
+                                  <Badge variant="outline" className="text-[9px] h-5 border-green-500 text-green-600">PDF Hosted</Badge>
+                                )}
+                                {pub.id.startsWith('pub-sample-') && (
+                                  <Badge variant="secondary" className="text-[9px] h-5">Sample</Badge>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          {!pub.id.startsWith('pub-sample-') && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handlePubDelete(pub.id)}
+                              className="text-destructive hover:bg-destructive/10 shrink-0"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* ── Gallery ── */}
+          <TabsContent value="gallery">
+            <div className="grid lg:grid-cols-5 gap-6">
+              {/* Add Image Form */}
+              <Card className="lg:col-span-2 h-fit">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Plus className="w-5 h-5 text-primary" />
+                    Add Gallery Image
+                  </CardTitle>
+                  <CardDescription>Upload images from events and workshops.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleGallerySubmit} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="gallery-title">Image Title *</Label>
+                      <Input
+                        id="gallery-title"
+                        placeholder="Event name or activity..."
+                        value={galleryForm.title}
+                        onChange={handleGalleryInputChange}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="gallery-description">Description</Label>
+                      <Textarea
+                        id="gallery-description"
+                        placeholder="Briefly describe the moment..."
+                        rows={3}
+                        value={galleryForm.description}
+                        onChange={handleGalleryInputChange}
+                      />
+                    </div>
+
+                    <div className="space-y-2 p-4 rounded-lg bg-muted/30 border border-primary/20">
+                      <Label className="flex items-center gap-2">
+                        Image *
+                      </Label>
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <Input type="file" accept="image/*" onChange={handleGalleryImageUpload} className="flex-1" />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground whitespace-nowrap">or</span>
+                          <Input
+                            id="gallery-image_url"
+                            placeholder="Paste image URL here"
+                            value={galleryForm.image_url}
+                            onChange={handleGalleryInputChange}
+                          />
+                        </div>
+                        {galleryForm.image_url && (
+                          <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-primary/20">
+                            <img
+                              src={galleryForm.image_url}
+                              alt="Preview"
+                              className="w-full h-full object-cover"
+                              onError={(e) => { (e.target as HTMLImageElement).src = "https://via.placeholder.com/400x200?text=Invalid+Image"; }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <Button type="submit" className="w-full">✨ Add to Gallery</Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              {/* Gallery List */}
+              <Card className="lg:col-span-3">
+                <CardHeader>
+                  <CardTitle>Currently in Gallery</CardTitle>
+                  <CardDescription>All images shown on the public gallery page.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                    {galleryImages.length === 0 ? (
+                      <div className="col-span-full text-center py-12 border border-dashed rounded-xl">
+                        <p className="text-muted-foreground italic">No images yet.</p>
+                      </div>
+                    ) : (
+                      galleryImages.map((image) => (
+                        <div key={image.id} className="group relative aspect-square rounded-xl overflow-hidden border hover:border-primary/50 transition-all">
+                          <img
+                            src={image.image_url}
+                            alt={image.title}
+                            className="w-full h-full object-cover"
+                          />
+                          <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-2 text-center">
+                            <p className="text-white text-xs font-medium mb-1 line-clamp-2">{image.title}</p>
+                            {!image.id.startsWith('gallery-sample-') && (
+                              <Button
+                                variant="destructive"
+                                size="icon"
+                                onClick={() => handleGalleryDelete(image.id)}
+                                className="h-8 w-8"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            )}
+                            {image.id.startsWith('gallery-sample-') && (
+                              <Badge variant="secondary" className="text-[10px]">Sample Content</Badge>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* ── Awards / Achievements ── */}
+          <TabsContent value="awards">
+            <div className="grid lg:grid-cols-5 gap-6">
+              <Card className="lg:col-span-2 h-fit">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Trophy className="w-5 h-5 text-primary" />
+                    New Achievement
+                  </CardTitle>
+                  <CardDescription>Add a new milestone to the club's trophy case.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleAchievementSubmit} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="ach-title">Title *</Label>
+                      <Input
+                        id="ach-title"
+                        placeholder="e.g. Winner of Smart India Hackathon"
+                        value={achievementForm.title}
+                        onChange={(e) => setAchievementForm(prev => ({ ...prev, title: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="ach-date">Date *</Label>
+                      <Input
+                        id="ach-date"
+                        type="date"
+                        value={achievementForm.date}
+                        onChange={(e) => setAchievementForm(prev => ({ ...prev, date: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="ach-description">Brief Description</Label>
+                      <Textarea
+                        id="ach-description"
+                        placeholder="What was achieved..."
+                        rows={4}
+                        value={achievementForm.description}
+                        onChange={(e) => setAchievementForm(prev => ({ ...prev, description: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="ach-image">Image URL (Optional)</Label>
+                      <Input
+                        id="ach-image"
+                        placeholder="https://..."
+                        value={achievementForm.image_url}
+                        onChange={(e) => setAchievementForm(prev => ({ ...prev, image_url: e.target.value }))}
+                      />
+                    </div>
+                    <Button type="submit" className="w-full">🏆 Add Achievement</Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              <Card className="lg:col-span-3">
+                <CardHeader>
+                  <CardTitle>Trophy Case</CardTitle>
+                  <CardDescription>Managing {achievements.length} accomplishments.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {achievements.length === 0 ? (
+                      <div className="text-center py-12 border border-dashed rounded-xl">
+                        <p className="text-muted-foreground italic">No achievements recorded in Supabase.</p>
+                      </div>
+                    ) : (
+                      achievements.map((ach) => (
+                        <div key={ach.id} className="flex gap-4 p-4 border rounded-xl hover:bg-muted/30 transition-colors">
+                          <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                            <Trophy className="w-6 h-6 text-primary" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <h4 className="font-semibold text-sm truncate">{ach.title}</h4>
+                              <Button variant="ghost" size="icon" onClick={() => handleAchievementDelete(ach.id)} className="text-destructive h-8 w-8">
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground mb-2">{format(new Date(ach.date), "MMMM d, yyyy")}</p>
+                            <p className="text-xs text-muted-foreground line-clamp-2">{ach.description}</p>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* ── FAQ ── */}
+          <TabsContent value="faq">
+            <div className="grid lg:grid-cols-5 gap-6">
+              <Card className="lg:col-span-2 h-fit">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <MessageSquare className="w-5 h-5 text-primary" />
+                    Add FAQ Item
+                  </CardTitle>
+                  <CardDescription>Answer common questions from members.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleFAQSubmit} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="faq-cat">Category</Label>
+                      <Input
+                        id="faq-cat"
+                        placeholder="e.g. General, Members, Technical"
+                        value={faqForm.category}
+                        onChange={(e) => setFaqForm(prev => ({ ...prev, category: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="faq-q">Question *</Label>
+                      <Input
+                        id="faq-q"
+                        placeholder="The question..."
+                        value={faqForm.question}
+                        onChange={(e) => setFaqForm(prev => ({ ...prev, question: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="faq-a">Answer *</Label>
+                      <Textarea
+                        id="faq-a"
+                        placeholder="The detailed answer..."
+                        rows={6}
+                        value={faqForm.answer}
+                        onChange={(e) => setFaqForm(prev => ({ ...prev, answer: e.target.value }))}
+                      />
+                    </div>
+                    <Button type="submit" className="w-full">➕ Add to FAQ</Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              <Card className="lg:col-span-3">
+                <CardHeader>
+                  <CardTitle>FAQ List</CardTitle>
+                  <CardDescription>Showing {faqs.length} entries.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {faqs.length === 0 ? (
+                      <div className="text-center py-12 border border-dashed rounded-xl">
+                        <p className="text-muted-foreground italic">No FAQs found.</p>
+                      </div>
+                    ) : (
+                      faqs.map((faq) => (
+                        <div key={faq.id} className="p-4 border rounded-xl hover:bg-muted/30 transition-colors">
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              <Badge variant="secondary" className="text-[9px] mb-2 uppercase">{faq.category || "General"}</Badge>
+                              <h4 className="font-semibold text-sm leading-tight">{faq.question}</h4>
+                              <p className="text-xs text-muted-foreground mt-2 line-clamp-3">{faq.answer}</p>
+                            </div>
+                            <Button variant="ghost" size="icon" onClick={() => handleFAQDelete(faq.id)} className="text-destructive h-8 w-8 ml-2">
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* ── Messages / Inbox ── */}
+          <TabsContent value="messages">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Mail className="w-5 h-5 text-primary" />
+                    Contact Inbox
+                  </CardTitle>
+                  <CardDescription>Messages received via the contact form.</CardDescription>
+                </div>
+                <Badge variant="outline" className="h-6">
+                  {messages.filter(m => !m.read).length} Unread
+                </Badge>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {messages.length === 0 ? (
+                    <div className="text-center py-24 border border-dashed rounded-2xl">
+                      <Mail className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-20" />
+                      <p className="text-muted-foreground italic">Your inbox is empty.</p>
+                    </div>
+                  ) : (
+                    messages.map((msg) => (
+                      <div
+                        key={msg.id}
+                        className={`p-5 rounded-2xl border transition-all ${msg.read ? "bg-background border-border hover:border-primary/30" : "bg-primary/5 border-primary/20 shadow-sm"}`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex gap-4">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${msg.read ? "bg-muted text-muted-foreground" : "bg-primary text-primary-foreground"}`}>
+                              {msg.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2 mb-1">
+                                <h4 className={`text-sm ${msg.read ? "font-medium" : "font-bold"}`}>{msg.name}</h4>
+                                <span className="text-[10px] text-muted-foreground">·</span>
+                                <span className="text-[10px] text-muted-foreground">{format(new Date(msg.created_at), "MMM d, h:mm a")}</span>
+                              </div>
+                              <p className="text-xs font-semibold mb-1">{msg.subject}</p>
+                              <p className="text-xs text-muted-foreground leading-relaxed italic border-l-2 pl-3 border-primary/20 my-2">"{msg.message}"</p>
+                              <div className="flex items-center gap-4 mt-3">
+                                <a href={`mailto:${msg.email}`} className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1">
+                                  <Mail className="w-3 h-3" /> {msg.email}
+                                </a>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleMarkAsRead(msg.id, !msg.read)}
+                              className="text-[10px] h-8"
+                            >
+                              {msg.read ? "Mark Unread" : "Mark Read"}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleMessageDelete(msg.id)}
+                              className="text-destructive h-8 w-8 hover:bg-destructive/10"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="certificates">
+            <CertificateSender />
+          </TabsContent>
+
+          {/* ── Students ── */}
+          <TabsContent value="students">
+            <StudentsTab />
+          </TabsContent>
+
+          {/* ── Socials ── */}
+          <TabsContent value="socials">
+            <div className="grid lg:grid-cols-5 gap-6">
+              <Card className="lg:col-span-2 h-fit border-primary/20 bg-primary/5">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Plus className="w-5 h-5 text-primary" />
+                    Add Social Post
+                  </CardTitle>
+                  <CardDescription>Share recent updates from Instagram, LinkedIn, or Twitter.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleSocialSubmit} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="social-url">Post URL</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="social-url"
+                          placeholder="https://instagram.com/p/..."
+                          value={socialForm.post_url}
+                          onChange={(e) => {
+                            setSocialForm(prev => ({ ...prev, post_url: e.target.value }));
+                            if (e.target.value.length > 20) fetchSocialMetadata(e.target.value);
+                          }}
+                        />
+                        {isFetchingSocial && <Loader2 className="w-4 h-4 animate-spin self-center" />}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>Platform</Label>
+                        <Select value={socialForm.platform} onValueChange={(v) => setSocialForm(prev => ({ ...prev, platform: v }))}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="instagram">Instagram</SelectItem>
+                            <SelectItem value="linkedin">LinkedIn</SelectItem>
+                            <SelectItem value="twitter">Twitter / X</SelectItem>
+                            <SelectItem value="facebook">Facebook</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Username</Label>
+                        <Input
+                          placeholder="@techshastra"
+                          value={socialForm.username}
+                          onChange={(e) => setSocialForm(prev => ({ ...prev, username: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>Caption / Content</Label>
+                      <Textarea
+                        placeholder="What's this post about?"
+                        value={socialForm.content}
+                        onChange={(e) => setSocialForm(prev => ({ ...prev, content: e.target.value }))}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>Preview Image URL</Label>
+                      <Input
+                        placeholder="Image URL"
+                        value={socialForm.image_url}
+                        onChange={(e) => setSocialForm(prev => ({ ...prev, image_url: e.target.value }))}
+                      />
+                    </div>
+
+                    <Button type="submit" className="w-full">Sync to Socials Page</Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              <Card className="lg:col-span-3">
+                <CardHeader>
+                  <CardTitle>Social Feed Management</CardTitle>
+                  <CardDescription>Managing {socialPosts.length} posts currently shown on the site.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {socialPosts.length === 0 ? (
+                      <div className="text-center py-12 border border-dashed rounded-xl">
+                        <p className="text-muted-foreground italic">No social posts added yet.</p>
+                      </div>
+                    ) : (
+                      socialPosts.map((post) => (
+                        <div key={post.id} className="flex items-center justify-between p-4 border rounded-xl hover:bg-muted/50 transition-colors">
+                          <div className="flex items-center gap-4 flex-1">
+                            <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center overflow-hidden">
+                              {post.image_url ? (
+                                <img src={post.image_url} alt="" className="w-full h-full object-cover" />
+                              ) : (
+                                <Link className="w-6 h-6 text-primary" />
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium truncate">{post.username}</span>
+                                <Badge variant="outline" className="text-[10px] capitalize">
+                                  {post.platform}
+                                </Badge>
+                              </div>
+                              <p className="text-xs text-muted-foreground truncate">{post.content}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 ml-4">
+                            <a href={post.post_url} target="_blank" rel="noopener noreferrer">
+                              <Button variant="ghost" size="icon">
+                                <Globe className="w-4 h-4" />
+                              </Button>
+                            </a>
+                            <Button variant="ghost" size="icon" onClick={() => handleSocialDelete(post.id)} className="text-destructive hover:bg-destructive/10">
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* ── Super Admin Panel ── */}
+          {isSuperAdmin && (
+            <TabsContent value="super-admin">
+              <div className="space-y-8">
+                {/* ── Change Super Admin Credentials ── */}
+                <ChangeSuperAdminCard actor={currentUserName} onChanged={() => toast({ title: "Super admin credentials updated ✓" })} />
+
+                {/* ── Create Admin Credentials ── */}
+                <Card className="border-green-500/20">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <UserPlus className="w-5 h-5 text-green-500" />
+                      Create Admin Credentials
+                    </CardTitle>
+                    <CardDescription>
+                      Generate unique login credentials for a new admin. The system creates a username and password from their name, mobile, and date of birth.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const form = e.target as HTMLFormElement;
+                        const name = (form.elements.namedItem("cred-name") as HTMLInputElement).value;
+                        const mobile = (form.elements.namedItem("cred-mobile") as HTMLInputElement).value;
+                        const dob = (form.elements.namedItem("cred-dob") as HTMLInputElement).value;
+                        const email = (form.elements.namedItem("cred-email") as HTMLInputElement).value;
+                        try {
+                          const cred = createAdminCredential(name, mobile, dob, "admin", email || undefined);
+                          const loginFormat = `${name},${mobile},${dob}`;
+                          // Log creation
+                          addLogEntry({
+                            actor: currentUserName,
+                            action: `Created admin credentials for ${cred.name}${email ? ` (${email})` : ""}`,
+                            type: "create_credential",
+                            revertible: true,
+                            credentialSnapshot: cred,
+                          });
+                          // Send credentials via email
+                          if (email) {
+                            const subject = encodeURIComponent("Your TECHSHASTRA Admin Credentials");
+                            const body = encodeURIComponent(
+                              `Hello ${cred.name},\n\nYour admin credentials for the TECHSHASTRA Admin Panel have been created.\n\n` +
+                              `🔑 Login: ${loginFormat}\n\n` +
+                              `(Format: Name,Mobile,DateOfBirth — enter this in the login field)\n\n` +
+                              `Please login at: ${window.location.origin}/auth\n\n` +
+                              `Keep these credentials private. Do not share them with anyone.\n\n` +
+                              `Regards,\nTECHSHASTRA Super Admin`
+                            );
+                            window.open(`mailto:${email}?subject=${subject}&body=${body}`);
+                          }
+                          toast({
+                            title: "✅ Admin Created!",
+                            description: email
+                              ? `Credentials sent to ${email}. Login: ${loginFormat}`
+                              : `Login: ${loginFormat}`,
+                          });
+                          trackAction(`Created admin: ${name}`);
+                          form.reset();
+                          refreshCredsAndLog();
+                        } catch (err: any) {
+                          toast({ title: "Failed", description: err.message, variant: "destructive" });
+                        }
+                      }}
+                      className="space-y-4"
+                    >
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="cred-name" className="flex items-center gap-1.5">
+                            <Users className="w-3.5 h-3.5" /> Full Name
+                          </Label>
+                          <Input id="cred-name" name="cred-name" placeholder="Rahul Sharma" required />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="cred-mobile" className="flex items-center gap-1.5">
+                            <Phone className="w-3.5 h-3.5" /> Mobile Number
+                          </Label>
+                          <Input id="cred-mobile" name="cred-mobile" placeholder="9876543210" required pattern="[0-9]{10,}" title="Enter a valid mobile number" />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="cred-dob" className="flex items-center gap-1.5">
+                            <CalendarDays className="w-3.5 h-3.5" /> Date of Birth
+                          </Label>
+                          <Input id="cred-dob" name="cred-dob" type="date" required />
+                        </div>
+                      </div>
+                      {/* Email field — full width */}
+                      <div className="space-y-2">
+                        <Label htmlFor="cred-email" className="flex items-center gap-1.5">
+                          <Mail className="w-3.5 h-3.5" /> Email Address
+                          <span className="text-[10px] text-muted-foreground font-normal bg-muted px-2 py-0.5 rounded-full">credentials sent here</span>
+                        </Label>
+                        <Input
+                          id="cred-email"
+                          name="cred-email"
+                          type="email"
+                          placeholder="admin@example.com"
+                          className="w-full"
+                        />
+                        <p className="text-[10px] text-muted-foreground px-1">
+                          If provided, your default mail app will open pre-filled with the credentials to send.
+                        </p>
+                      </div>
+                      <Button type="submit" className="w-full bg-green-600 hover:bg-green-700">
+                        <Key className="w-4 h-4 mr-2" /> Generate & Save Credentials
+                      </Button>
+                    </form>
+
+                    {/* Existing Credentials List */}
+                    {credsList.length > 0 && (
+                      <div className="mt-6 space-y-2">
+                        <h4 className="text-sm font-semibold mb-3">Active Admin Accounts ({credsList.length})</h4>
+                        {credsList.map(cred => (
+                          <div
+                            key={cred.id}
+                            className={`flex items-center justify-between p-3 rounded-lg border ${cred.is_blocked ? "border-destructive/30 bg-destructive/5" : "border-border hover:bg-muted/30"
+                              } transition-colors`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className={`w-9 h-9 rounded-full flex items-center justify-center ${cred.is_blocked ? "bg-destructive/20" : "bg-green-500/10"
+                                }`}>
+                                {cred.is_blocked ? (
+                                  <Ban className="w-4 h-4 text-destructive" />
+                                ) : (
+                                  <UserCheck className="w-4 h-4 text-green-600" />
+                                )}
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <p className="font-medium text-sm">{cred.name}</p>
+                                  {cred.is_blocked && (
+                                    <Badge variant="destructive" className="text-[10px]">BLOCKED</Badge>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <Badge variant="outline" className="text-[10px] font-mono">
+                                    {cred.name},{cred.mobile}
+                                  </Badge>
+                                  <span className="text-[10px] text-muted-foreground">
+                                    {new Date(cred.dob).toLocaleDateString('en-IN')}
+                                  </span>
+                                </div>
+                                {cred.email && (
+                                  <div className="flex items-center gap-1 mt-0.5">
+                                    <Mail className="w-3 h-3 text-muted-foreground" />
+                                    <span className="text-[10px] text-muted-foreground">{cred.email}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                title="Copy login credentials"
+                                onClick={() => {
+                                  const loginFormat = `${cred.name},${cred.mobile},${cred.dob}`;
+                                  navigator.clipboard.writeText(`Login: ${loginFormat}`);
+                                  toast({ title: "Copied!", description: "Login credentials copied to clipboard" });
+                                }}
+                              >
+                                <Copy className="w-3.5 h-3.5" />
+                              </Button>
+                              {cred.email && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  title="Resend credentials by email"
+                                  onClick={() => {
+                                    const loginFormat = `${cred.name},${cred.mobile},${cred.dob}`;
+                                    const subject = encodeURIComponent("Your TECHSHASTRA Admin Credentials");
+                                    const body = encodeURIComponent(
+                                      `Hello ${cred.name},\n\nYour admin credentials for the TECHSHASTRA Admin Panel:\n\n` +
+                                      `🔑 Login: ${loginFormat}\n\n` +
+                                      `(Format: Name,Mobile,DateOfBirth)\n\n` +
+                                      `Login at: ${window.location.origin}/auth\n\nKeep these private.\n\nRegards,\nTECHSHASTRA Super Admin`
+                                    );
+                                    window.open(`mailto:${cred.email}?subject=${subject}&body=${body}`);
+                                    toast({ title: "Mail Opened", description: `Email draft opened for ${cred.email}` });
+                                  }}
+                                >
+                                  <Mail className="w-3.5 h-3.5" />
+                                </Button>
+                              )}
+                              <Button
+                                size="sm"
+                                variant={cred.is_blocked ? "default" : "outline"}
+                                onClick={() => {
+                                  const wasBlocked = cred.is_blocked;
+                                  if (wasBlocked) {
+                                    unblockAdmin(cred.id);
+                                  } else {
+                                    blockAdmin(cred.id);
+                                  }
+                                  addLogEntry({
+                                    actor: currentUserName,
+                                    action: `${wasBlocked ? "Unblocked" : "Blocked"} admin: ${cred.name}`,
+                                    type: wasBlocked ? "unblock_credential" : "block_credential",
+                                    revertible: true,
+                                    credentialId: cred.id,
+                                    credentialSnapshot: cred,
+                                  });
+                                  toast({
+                                    title: wasBlocked ? "Unblocked" : "Blocked",
+                                    description: `${cred.name} has been ${wasBlocked ? "unblocked" : "blocked"}.`,
+                                  });
+                                  trackAction(`${wasBlocked ? "Unblocked" : "Blocked"} admin: ${cred.name}`);
+                                  refreshCredsAndLog();
+                                }}
+                              >
+                                {cred.is_blocked ? "Unblock" : "Block"}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-destructive hover:text-destructive"
+                                onClick={() => {
+                                  addLogEntry({
+                                    actor: currentUserName,
+                                    action: `Deleted admin credentials for ${cred.name}`,
+                                    type: "delete_credential",
+                                    revertible: true,
+                                    credentialSnapshot: { ...cred },
+                                  });
+                                  deleteAdminCredential(cred.id);
+                                  toast({ title: "Deleted", description: `${cred.name}'s credentials removed. You can revert this from the Activity Log.` });
+                                  trackAction(`Deleted admin: ${cred.name}`);
+                                  refreshCredsAndLog();
+                                }}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* ── Admin User Management ── */}
+                <Card className="border-primary/20">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <ShieldCheck className="w-5 h-5 text-primary" />
+                      Admin User Management
+                    </CardTitle>
+                    <CardDescription>
+                      Manage who has admin access. You can add, remove, block, or unblock admins.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    {/* Current admins list */}
+                    {superAdminLoading ? (
+                      <div className="flex items-center justify-center py-8">
+                        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {adminUsers.length === 0 ? (
+                          <div className="text-center py-8 border border-dashed rounded-xl">
+                            <p className="text-muted-foreground">No admin users configured yet.</p>
+                          </div>
+                        ) : (
+                          adminUsers.map(user => (
+                            <div
+                              key={user.user_id}
+                              className={`flex items-center justify-between p-4 rounded-lg border ${user.is_blocked ? "border-destructive/30 bg-destructive/5" : "border-border hover:bg-muted/50"
+                                } transition-colors`}
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${user.role === "super_admin" ? "bg-primary/20" : user.is_blocked ? "bg-destructive/20" : "bg-muted"
+                                  }`}>
+                                  {user.role === "super_admin" ? (
+                                    <ShieldCheck className="w-5 h-5 text-primary" />
+                                  ) : user.is_blocked ? (
+                                    <Ban className="w-5 h-5 text-destructive" />
+                                  ) : (
+                                    <UserCheck className="w-5 h-5 text-muted-foreground" />
+                                  )}
+                                </div>
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <p className="font-medium text-sm">{user.full_name || user.user_id.slice(0, 8)}</p>
+                                    <Badge variant={user.role === "super_admin" ? "default" : "secondary"} className="text-[10px]">
+                                      {user.role === "super_admin" ? "⭐ Super" : "Admin"}
+                                    </Badge>
+                                    {user.is_blocked && (
+                                      <Badge variant="destructive" className="text-[10px]">BLOCKED</Badge>
+                                    )}
+                                  </div>
+                                  {user.block_reason && (
+                                    <p className="text-[11px] text-destructive mt-0.5">Reason: {user.block_reason}</p>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Actions — can't modify own super_admin account */}
+                              {user.role !== "super_admin" && (
+                                <div className="flex items-center gap-2">
+                                  {user.is_blocked ? (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => handleUnblockAdmin(user.user_id, user.full_name)}
+                                      className="gap-1 text-xs"
+                                    >
+                                      <UserCheck className="w-3 h-3" /> Unblock
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => handleBlockAdmin(user.user_id, user.full_name)}
+                                      className="gap-1 text-xs text-orange-600 border-orange-600/30 hover:bg-orange-600/10"
+                                    >
+                                      <Ban className="w-3 h-3" /> Block
+                                    </Button>
+                                  )}
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleRemoveAdmin(user.user_id, user.full_name)}
+                                    className="gap-1 text-xs text-destructive hover:bg-destructive/10"
+                                  >
+                                    <UserX className="w-3 h-3" /> Remove
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* ── Page Visibility Controls ── */}
+                <Card className="border-primary/20">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Eye className="w-5 h-5 text-primary" />
+                      Page Visibility Controls
+                    </CardTitle>
+                    <CardDescription>
+                      Toggle pages on or off. Hidden pages will show a 404 to visitors and be removed from the navigation.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {superAdminLoading ? (
+                      <div className="flex items-center justify-center py-8">
+                        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {pages.map(page => (
+                          <div
+                            key={page.id}
+                            className={`flex items-center justify-between p-4 rounded-lg border ${page.is_visible ? "border-border" : "border-orange-500/30 bg-orange-500/5"
+                              } transition-colors`}
+                          >
+                            <div className="flex items-center gap-3">
+                              {page.is_visible ? (
+                                <Eye className="w-5 h-5 text-green-500" />
+                              ) : (
+                                <EyeOff className="w-5 h-5 text-orange-500" />
+                              )}
+                              <div>
+                                <p className="font-medium text-sm">{page.page_name}</p>
+                                <p className="text-[11px] text-muted-foreground">{page.page_path}</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className={`text-xs font-medium ${page.is_visible ? "text-green-500" : "text-orange-500"}`}>
+                                {page.is_visible ? "Visible" : "Hidden"}
+                              </span>
+                              <Switch
+                                checked={page.is_visible}
+                                onCheckedChange={() => handleTogglePage(page)}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* ── Live Activity Monitor ── */}
+                <Card className="border-green-500/20">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Users className="w-5 h-5 text-green-500" />
+                      Live Activity Monitor
+                      <span className="relative flex h-3 w-3">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                      </span>
+                    </CardTitle>
+                    <CardDescription>
+                      Real-time view of admin activity. See who's online, what tab they're on, and their last action.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    {/* Online Admins */}
+                    <div>
+                      <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                        Currently Online ({onlineAdmins.length})
+                      </h4>
+                      {onlineAdmins.length === 0 ? (
+                        <div className="text-center py-6 border border-dashed rounded-xl">
+                          <p className="text-muted-foreground text-sm">No admins currently online</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {onlineAdmins.map(admin => (
+                            <div
+                              key={admin.user_id}
+                              className="flex items-center justify-between p-3 rounded-lg bg-green-500/5 border border-green-500/20"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="relative">
+                                  <div className="w-9 h-9 rounded-full bg-green-500/20 flex items-center justify-center">
+                                    <Users className="w-4 h-4 text-green-600" />
+                                  </div>
+                                  <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-green-500 border-2 border-background"></span>
+                                </div>
+                                <div>
+                                  <p className="text-sm font-medium">{admin.full_name}</p>
+                                  <div className="flex items-center gap-2 mt-0.5">
+                                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">
+                                      💻 {admin.current_tab}
+                                    </Badge>
+                                    <span className="text-[10px] text-muted-foreground">
+                                      {admin.last_action}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <Badge variant="default" className="bg-green-500 text-[10px]">
+                                  🟢 LIVE
+                                </Badge>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Activity Feed */}
+                    <div>
+                      <h4 className="text-sm font-semibold mb-3">Activity Feed</h4>
+                      {activityLog.length === 0 ? (
+                        <div className="text-center py-6 border border-dashed rounded-xl">
+                          <p className="text-muted-foreground text-sm">No activity recorded yet. Actions will appear here in real-time.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5 max-h-[400px] overflow-y-auto pr-2">
+                          {activityLog.map(entry => (
+                            <div
+                              key={entry.id}
+                              className={`flex items-start gap-3 p-2.5 rounded-lg text-xs transition-colors ${entry.is_login
+                                ? "bg-green-500/5 border border-green-500/10"
+                                : entry.is_logout
+                                  ? "bg-red-500/5 border border-red-500/10"
+                                  : "bg-muted/30 border border-transparent hover:border-border"
+                                }`}
+                            >
+                              <div className="mt-0.5">
+                                {entry.is_login ? (
+                                  <span className="text-green-500 text-base">🟢</span>
+                                ) : entry.is_logout ? (
+                                  <span className="text-red-500 text-base">🔴</span>
+                                ) : (
+                                  <span className="text-blue-400 text-base">▶️</span>
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-semibold">{entry.full_name}</span>
+                                  <span className="text-muted-foreground">—</span>
+                                  <span className={`${entry.is_login ? "text-green-600 font-medium"
+                                    : entry.is_logout ? "text-red-500 font-medium"
+                                      : "text-foreground"
+                                    }`}>
+                                    {entry.action}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 mt-0.5 text-[10px] text-muted-foreground">
+                                  <span>💻 {entry.tab}</span>
+                                  <span>·</span>
+                                  <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+                {/* ── Persistent Activity Log ── */}
+                <Card className="border-amber-500/20">
+                  <CardHeader>
+                    <CardTitle className="flex items-center justify-between">
+                      <span className="flex items-center gap-2">
+                        <ClipboardList className="w-5 h-5 text-amber-500" />
+                        Super Admin Activity Log
+                      </span>
+                      {logEntries.length > 0 && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-xs text-muted-foreground hover:text-destructive"
+                          onClick={() => {
+                            clearLog();
+                            refreshCredsAndLog();
+                            toast({ title: "Log Cleared", description: "All activity log entries have been removed." });
+                          }}
+                        >
+                          <X className="w-3.5 h-3.5 mr-1" /> Clear Log
+                        </Button>
+                      )}
+                    </CardTitle>
+                    <CardDescription>
+                      Every Super Admin action is recorded here. Reversible actions can be undone with the Revert button.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {logEntries.length === 0 ? (
+                      <div className="text-center py-8 border border-dashed rounded-xl">
+                        <ClipboardList className="w-8 h-8 text-muted-foreground mx-auto mb-2 opacity-30" />
+                        <p className="text-muted-foreground text-sm">No actions recorded yet. Actions will appear here.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
+                        {logEntries.map(entry => (
+                          <div
+                            key={entry.id}
+                            className={`flex items-start justify-between gap-3 p-3 rounded-lg border text-xs ${entry.type === "create_credential"
+                              ? "border-green-500/20 bg-green-500/5"
+                              : entry.type === "delete_credential"
+                                ? "border-destructive/20 bg-destructive/5"
+                                : entry.type === "block_credential"
+                                  ? "border-orange-500/20 bg-orange-500/5"
+                                  : entry.type === "unblock_credential"
+                                    ? "border-blue-500/20 bg-blue-500/5"
+                                    : "border-border bg-muted/20"
+                              }`}
+                          >
+                            <div className="flex gap-2.5 flex-1 min-w-0">
+                              <span className="text-base mt-0.5 flex-shrink-0">
+                                {entry.type === "create_credential" ? "✅"
+                                  : entry.type === "delete_credential" ? "🗑️"
+                                    : entry.type === "block_credential" ? "🚫"
+                                      : entry.type === "unblock_credential" ? "✔️"
+                                        : "📋"}
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium leading-snug">{entry.action}</p>
+                                <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
+                                  <span>👤 {entry.actor}</span>
+                                  <span>·</span>
+                                  <span>{new Date(entry.timestamp).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}</span>
+                                </div>
+                              </div>
+                            </div>
+                            {entry.revertible && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-[10px] h-7 px-2 flex-shrink-0 gap-1 border-amber-500/40 text-amber-600 hover:bg-amber-500/10"
+                                onClick={() => {
+                                  const result = revertEntry(entry.id, saveCredentialsRaw);
+                                  if (result.success) {
+                                    toast({ title: "↩️ Reverted", description: result.message });
+                                  } else {
+                                    toast({ title: "Revert Failed", description: result.message, variant: "destructive" });
+                                  }
+                                  refreshCredsAndLog();
+                                }}
+                              >
+                                <RotateCcw className="w-3 h-3" /> Revert
+                              </Button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Data Backup & Export */}
+                <Card className="border-primary/20">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Download className="w-5 h-5 text-primary" />
+                      Data Backup & Export
+                    </CardTitle>
+                    <CardDescription>
+                      Export all localStorage data to JSON file or import from backup. Storage: {getStorageSize()}KB used.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        onClick={() => {
+                          exportAllData(currentUserName);
+                          toast({ title: "Backup Downloaded", description: "All data exported successfully." });
+                          trackAction("Exported all data");
+                        }}
+                        className="flex items-center gap-2"
+                      >
+                        <Download className="w-4 h-4" />
+                        Export All Data
+                      </Button>
+                      
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          const input = document.createElement('input');
+                          input.type = 'file';
+                          input.accept = '.json';
+                          input.onchange = async (e: any) => {
+                            const file = e.target?.files?.[0];
+                            if (file) {
+                              try {
+                                await importAllData(file);
+                                toast({ title: "Import Successful", description: "Data restored from backup." });
+                                window.location.reload();
+                              } catch (error) {
+                                toast({ title: "Import Failed", description: String(error), variant: "destructive" });
+                              }
+                            }
+                          };
+                          input.click();
+                        }}
+                        className="flex items-center gap-2"
+                      >
+                        <Upload className="w-4 h-4" />
+                        Import Backup
+                      </Button>
+
+                      <Button
+                        variant="destructive"
+                        onClick={() => {
+                          if (confirm("⚠️ This will DELETE ALL data! This cannot be undone. Are you sure?")) {
+                            clearAllData();
+                            toast({ title: "All Data Cleared", description: "localStorage has been wiped." });
+                            setTimeout(() => window.location.reload(), 1000);
+                          }
+                        }}
+                        className="flex items-center gap-2"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        Clear All Data
+                      </Button>
+                    </div>
+                    
+                    <div className="text-xs text-muted-foreground space-y-1">
+                      <p>• <strong>Export</strong>: Download JSON backup of all data (projects, blog, events, etc.)</p>
+                      <p>• <strong>Import</strong>: Restore data from a previous backup file</p>
+                      <p>• <strong>Clear</strong>: Remove all data from browser storage (use with caution!)</p>
+                      <p className="text-amber-500">💡 Tip: Export regularly to prevent data loss on cache clear</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </TabsContent>
+          )}
+
+          {/* ── Live User Activity Telemetry ── */}
+          <TabsContent value="telemetry" className="space-y-6">
+            {/* Telemetry Metric Cards */}
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+              <Card className="bg-primary/5 border-primary/20">
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-xs font-mono uppercase tracking-widest text-foreground/70">Total Registered Members</CardTitle>
+                  <Users className="h-4 w-4 text-primary" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-3xl font-heading font-light">{telemetrySummary?.total_users ?? backendMembers.length}</div>
+                  <p className="text-[11px] font-mono text-muted-foreground mt-1">Platform verified members</p>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-cyan-500/5 border-cyan-500/20">
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-xs font-mono uppercase tracking-widest text-foreground/70">Active Users Today</CardTitle>
+                  <Activity className="h-4 w-4 text-cyan-400" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-3xl font-heading font-light text-cyan-400">{telemetrySummary?.active_today ?? 0}</div>
+                  <p className="text-[11px] font-mono text-muted-foreground mt-1">Unique accounts active in last 24h</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-xs font-mono uppercase tracking-widest text-foreground/70">Total Page Interactions</CardTitle>
+                  <Eye className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-3xl font-heading font-light">{telemetrySummary?.total_page_views ?? telemetryActivities.length}</div>
+                  <p className="text-[11px] font-mono text-muted-foreground mt-1">Total user visits recorded</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-xs font-mono uppercase tracking-widest text-foreground/70">Event Registrations</CardTitle>
+                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-3xl font-heading font-light">{telemetrySummary?.total_registrations ?? 0}</div>
+                  <p className="text-[11px] font-mono text-muted-foreground mt-1">Campus event signups</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Live Feed Table */}
+            <Card>
+              <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Activity className="w-5 h-5 text-primary" />
+                    Real-Time Activity Stream
+                  </CardTitle>
+                  <CardDescription>
+                    Live telemetry logs capturing every member visit, login, event registration, and project upload.
+                  </CardDescription>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <select
+                    value={activityActionFilter}
+                    onChange={(e) => setActivityActionFilter(e.target.value)}
+                    className="h-9 px-3 text-xs font-mono bg-black/30 border border-foreground/10 rounded-lg text-foreground"
+                  >
+                    <option value="all">All Actions</option>
+                    <option value="login">Logins</option>
+                    <option value="signup">Signups</option>
+                    <option value="project_view">Project Views</option>
+                    <option value="project_create">Project Uploads</option>
+                    <option value="event_register">Event Registrations</option>
+                    <option value="page_view">Page Views</option>
+                  </select>
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={loadBackendAdminData}
+                    disabled={telemetryLoading}
+                    className="h-9 gap-1.5 text-xs font-mono"
+                  >
+                    {telemetryLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                    Refresh
+                  </Button>
+                </div>
+              </CardHeader>
+
+              <CardContent>
+                <div className="rounded-xl border border-foreground/10 overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs font-mono">
+                      <thead className="bg-black/30 text-foreground/60 uppercase tracking-wider text-[10px] border-b border-foreground/10">
+                        <tr>
+                          <th className="p-3">Time</th>
+                          <th className="p-3">User</th>
+                          <th className="p-3">Action</th>
+                          <th className="p-3">Target Resource</th>
+                          <th className="p-3">Client IP & Agent</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-foreground/5">
+                        {telemetryActivities
+                          .filter(a => activityActionFilter === "all" || a.action === activityActionFilter)
+                          .map((act) => (
+                            <tr key={act.id} className="hover:bg-primary/5 transition-colors">
+                              <td className="p-3 text-foreground/50 whitespace-nowrap">
+                                {formatDateSafe(act.created_at, "MMM d, HH:mm:ss")}
+                              </td>
+                              <td className="p-3 whitespace-nowrap">
+                                <div className="font-medium text-foreground">
+                                  {act.user_name || act.user_email || (act.user_id === 'anonymous' ? 'Anonymous Visitor' : act.user_id)}
+                                </div>
+                                {act.user_email && <div className="text-[10px] text-foreground/40">{act.user_email}</div>}
+                              </td>
+                              <td className="p-3 whitespace-nowrap">
+                                <Badge
+                                  variant="outline"
+                                  className={`text-[10px] uppercase font-mono tracking-wider ${
+                                    act.action === 'login' ? 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10' :
+                                    act.action === 'signup' ? 'border-purple-500/40 text-purple-400 bg-purple-500/10' :
+                                    act.action === 'project_create' ? 'border-amber-500/40 text-amber-400 bg-amber-500/10' :
+                                    act.action === 'event_register' ? 'border-cyan-500/40 text-cyan-400 bg-cyan-500/10' :
+                                    'border-foreground/20 text-foreground/70'
+                                  }`}
+                                >
+                                  {act.action}
+                                </Badge>
+                              </td>
+                              <td className="p-3">
+                                <div className="truncate max-w-[200px] text-foreground/80">
+                                  {act.resource_name || act.resource_id || '—'}
+                                </div>
+                                {act.resource_type && (
+                                  <span className="text-[9px] text-foreground/40 uppercase tracking-widest">{act.resource_type}</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-foreground/40 truncate max-w-[180px]">
+                                <div>{act.ip_address || '—'}</div>
+                                <div className="text-[9px] truncate">{act.user_agent ? act.user_agent.slice(0, 30) + '...' : ''}</div>
+                              </td>
+                            </tr>
+                          ))}
+                        {telemetryActivities.length === 0 && (
+                          <tr>
+                            <td colSpan={5} className="p-8 text-center text-foreground/40 italic">
+                              No telemetry recorded yet. Interactions will appear here automatically.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ── Club Members Management ── */}
+          <TabsContent value="backend-members" className="space-y-6">
+            <Card>
+              <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Users className="w-5 h-5 text-primary" />
+                    University Club Members & Users
+                  </CardTitle>
+                  <CardDescription>
+                    Manage registered student profiles, grant role privileges, and control account access.
+                  </CardDescription>
+                </div>
+
+                <div className="flex items-center gap-3 w-full sm:w-auto">
+                  <div className="relative flex-1 sm:w-64">
+                    <Search className="w-3.5 h-3.5 text-foreground/40 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <Input
+                      placeholder="Search member by name or email..."
+                      value={memberSearchQuery}
+                      onChange={(e) => setMemberSearchQuery(e.target.value)}
+                      className="pl-8 h-9 text-xs font-mono bg-black/20"
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={loadBackendAdminData}
+                    className="h-9 gap-1 text-xs font-mono"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                  </Button>
+                </div>
+              </CardHeader>
+
+              <CardContent>
+                <div className="rounded-xl border border-foreground/10 overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs font-mono">
+                      <thead className="bg-black/30 text-foreground/60 uppercase tracking-wider text-[10px] border-b border-foreground/10">
+                        <tr>
+                          <th className="p-3">Member</th>
+                          <th className="p-3">Student ID</th>
+                          <th className="p-3">Role</th>
+                          <th className="p-3">Status</th>
+                          <th className="p-3">Last Active</th>
+                          <th className="p-3 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-foreground/5">
+                        {backendMembers
+                          .filter(m => {
+                            if (!memberSearchQuery) return true;
+                            const q = memberSearchQuery.toLowerCase();
+                            return m.name.toLowerCase().includes(q) || m.email.toLowerCase().includes(q) || (m.student_id && m.student_id.toLowerCase().includes(q));
+                          })
+                          .map((mem) => (
+                            <tr key={mem.id} className="hover:bg-primary/5 transition-colors">
+                              <td className="p-3 whitespace-nowrap">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-xs">
+                                    {mem.name ? mem.name.slice(0, 1).toUpperCase() : 'U'}
+                                  </div>
+                                  <div>
+                                    <div className="font-medium text-foreground">{mem.name}</div>
+                                    <div className="text-[10px] text-foreground/50">{mem.email}</div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="p-3 text-foreground/70">
+                                {mem.student_id || '—'}
+                              </td>
+                              <td className="p-3">
+                                <select
+                                  value={mem.role}
+                                  onChange={(e) => handleRoleChange(mem.id, e.target.value)}
+                                  className="px-2 py-1 bg-black/40 border border-foreground/10 rounded text-[11px] font-mono text-foreground focus:border-primary"
+                                >
+                                  <option value="student">Student</option>
+                                  <option value="lead">Lead</option>
+                                  <option value="core">Core Team</option>
+                                  <option value="admin">Admin</option>
+                                </select>
+                              </td>
+                              <td className="p-3">
+                                {mem.banned ? (
+                                  <Badge variant="destructive" className="text-[10px]">Suspended</Badge>
+                                ) : (
+                                  <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-500/30 bg-emerald-500/10">Active</Badge>
+                                )}
+                              </td>
+                              <td className="p-3 text-foreground/50 text-[11px]">
+                                {mem.last_active_at ? formatDateSafe(mem.last_active_at, "MMM d, HH:mm") : 'Never'}
+                              </td>
+                              <td className="p-3 text-right">
+                                <Button
+                                  size="sm"
+                                  variant={mem.banned ? "outline" : "ghost"}
+                                  onClick={() => handleToggleBan(mem.id, !!mem.banned)}
+                                  className={`h-7 px-2 text-[10px] font-mono ${mem.banned ? 'text-emerald-400 border-emerald-500/30' : 'text-destructive hover:bg-destructive/10'}`}
+                                >
+                                  {mem.banned ? "Reactivate" : "Suspend"}
+                                </Button>
+                              </td>
+                            </tr>
+                          ))}
+                        {backendMembers.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="p-8 text-center text-foreground/40 italic">
+                              No members found. Users who sign up on the website will be listed here.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      </main>
+    </div>
+  );
+};
+
+export default Admin;
