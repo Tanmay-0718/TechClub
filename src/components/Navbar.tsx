@@ -2,14 +2,21 @@ import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Menu, X } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { motion, AnimatePresence } from "framer-motion";
 import { getStudentSession } from "@/lib/studentStore";
 import { useAuth } from "@/lib/authContext";
 import { User, LogOut, ShieldCheck, LayoutDashboard } from "lucide-react";
 
-const Navbar = () => {
+interface NavbarProps {
+  hideNavLinks?: boolean;
+}
+
+const Navbar = ({ hideNavLinks }: NavbarProps = {}) => {
+  const location = useLocation();
+  const isAuthPage = location.pathname === '/login' || location.pathname === '/signup';
+  const shouldHideLinks = hideNavLinks || isAuthPage;
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const studentSession = getStudentSession();
@@ -62,32 +69,34 @@ const Navbar = () => {
           </Link>
 
           {/* Desktop Navigation — center */}
-          <div className="hidden md:flex items-center space-x-8 absolute left-1/2 -translate-x-1/2">
-            {navLinks.map((link) => (
-              link.href.startsWith('#') ? (
-                <a
-                  key={link.label}
-                  href={link.href}
-                  className="text-sm font-light tracking-wider text-foreground/70 hover:text-foreground active:scale-95 transition-[color,transform] duration-150 ease-emil-out"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    const element = document.querySelector(link.href);
-                    element?.scrollIntoView({ behavior: 'smooth' });
-                  }}
-                >
-                  {link.label}
-                </a>
-              ) : (
-                <Link
-                  key={link.label}
-                  to={link.href}
-                  className="text-sm font-light tracking-wider text-foreground/70 hover:text-foreground active:scale-95 transition-[color,transform] duration-150 ease-emil-out"
-                >
-                  {link.label}
-                </Link>
-              )
-            ))}
-          </div>
+          {!shouldHideLinks && (
+            <div className="hidden md:flex items-center space-x-8 absolute left-1/2 -translate-x-1/2">
+              {navLinks.map((link) => (
+                link.href.startsWith('#') ? (
+                  <a
+                    key={link.label}
+                    href={link.href}
+                    className="text-sm font-light tracking-wider text-foreground/70 hover:text-foreground active:scale-95 transition-[color,transform] duration-150 ease-emil-out"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      const element = document.querySelector(link.href);
+                      element?.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                  >
+                    {link.label}
+                  </a>
+                ) : (
+                  <Link
+                    key={link.label}
+                    to={link.href}
+                    className="text-sm font-light tracking-wider text-foreground/70 hover:text-foreground active:scale-95 transition-[color,transform] duration-150 ease-emil-out"
+                  >
+                    {link.label}
+                  </Link>
+                )
+              ))}
+            </div>
+          )}
 
           {/* Right actions */}
           <div className="hidden md:flex items-center space-x-4 shrink-0">
@@ -143,14 +152,16 @@ const Navbar = () => {
           {/* Mobile Menu Button */}
           <div className="flex items-center gap-2 md:hidden">
             <ThemeToggle />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-foreground/70 active:scale-90 transition-transform duration-100 ease-emil-out z-50 relative rounded-full"
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-            >
-              {isMobileMenuOpen ? <X /> : <Menu />}
-            </Button>
+            {!shouldHideLinks && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-foreground/70 active:scale-90 transition-transform duration-100 ease-emil-out z-50 relative rounded-full"
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              >
+                {isMobileMenuOpen ? <X /> : <Menu />}
+              </Button>
+            )}
           </div>
         </div>
 
