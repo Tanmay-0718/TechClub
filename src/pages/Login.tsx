@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
-import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { useAuth } from '@/lib/authContext';
 import { trackPageView } from '@/lib/activityTracker';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Lock, Mail, ArrowRight, ShieldCheck, Sparkles } from 'lucide-react';
+import { Loader2, Lock, Mail, ArrowRight, ArrowLeft, ShieldCheck, Sparkles } from 'lucide-react';
 
 export const Login = () => {
   const [email, setEmail] = useState('');
@@ -56,7 +55,21 @@ export const Login = () => {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col justify-between selection:bg-primary/20">
-      <Navbar />
+      {/* Minimal Top Brand Bar without site navigation links */}
+      <header className="w-full max-w-7xl mx-auto px-6 pt-6 pb-2 flex items-center justify-between z-20">
+        <Link to="/" className="flex items-center gap-2 group">
+          <span className="font-heading text-xl font-bold tracking-wider text-primary group-hover:opacity-80 transition-opacity">
+            TECHSHASTRA
+          </span>
+        </Link>
+        <Link
+          to="/"
+          className="inline-flex items-center gap-2 text-xs font-mono text-foreground/60 hover:text-primary transition-colors px-3.5 py-1.5 rounded-full border border-foreground/10 glass"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          <span>Back to Home</span>
+        </Link>
+      </header>
 
       <main className="flex-1 flex items-center justify-center p-4 sm:p-6 py-20 relative overflow-hidden">
         {/* Ambient background glows */}

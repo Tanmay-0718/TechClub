@@ -161,26 +161,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!registeredUser) {
         const localMembers = getLocalMembers();
         const existing = localMembers.find(m => m.email.toLowerCase() === normEmail);
-        if (existing) {
-          throw new Error('An account with this email address already exists. Please log in.');
-        }
 
-        const newId = `usr_${Date.now()}`;
+        const newId = existing ? existing.id : `usr_${Date.now()}`;
         registeredUser = {
           id: newId,
           name: data.name.trim(),
           email: normEmail,
-          role: 'student',
-          student_id: data.student_id?.trim() || '',
-          bio: data.bio?.trim() || '',
-          github: data.github?.trim() || '',
-          linkedin: data.linkedin?.trim() || '',
-          skills: data.skills?.trim() || '',
-          avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(data.name)}`,
-          created_at: new Date().toISOString(),
-          projects_count: 0,
-          activity_count: 1,
-          registration_count: 0,
+          role: existing?.role || 'student',
+          student_id: data.student_id?.trim() || existing?.student_id || '',
+          bio: data.bio?.trim() || existing?.bio || '',
+          github: data.github?.trim() || existing?.github || '',
+          linkedin: data.linkedin?.trim() || existing?.linkedin || '',
+          skills: data.skills?.trim() || existing?.skills || '',
+          avatar: existing?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(data.name)}`,
+          created_at: existing?.created_at || new Date().toISOString(),
+          projects_count: existing?.projects_count || 0,
+          activity_count: (existing?.activity_count || 0) + 1,
+          registration_count: existing?.registration_count || 0,
         };
 
         saveLocalMember(registeredUser, data.password);

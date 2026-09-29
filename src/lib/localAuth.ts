@@ -44,20 +44,6 @@ function getInitialSeedMembers(): BackendMember[] {
       projects_count: 5,
       activity_count: 42,
       registration_count: 10,
-    },
-    {
-      id: 'student_1',
-      name: 'Tanmay Nautiyal',
-      email: 'nautiyaltanmay00@gmail.com',
-      role: 'student',
-      student_id: '250000101094',
-      bio: 'Robotics and Full Stack Developer exploring AI and Cloud Systems.',
-      skills: 'React, Go, Python, ROS, AI',
-      github: 'https://github.com/Tanmay-0718',
-      created_at: new Date().toISOString(),
-      projects_count: 2,
-      activity_count: 15,
-      registration_count: 3,
     }
   ];
 }
@@ -88,7 +74,6 @@ function getStoredPasswords(): Record<string, string> {
     if (!data) {
       return {
         'admin@techshastra.club': hashPassword('admin123'),
-        'nautiyaltanmay00@gmail.com': hashPassword('password123'),
       };
     }
     return JSON.parse(data);
