@@ -3,6 +3,7 @@
  * Captures user telemetry and periodically flushes to Go backend /api/activity
  */
 import { api, getAuthToken } from './api';
+import { isAnalyticsPermitted } from './cookieConsent';
 
 interface QueuedActivity {
   action: string;
@@ -30,6 +31,11 @@ export const flushActivityQueue = async () => {
 };
 
 export const queueActivity = (activity: QueuedActivity) => {
+  // Respect user cookie preferences: do not track telemetry if analytics cookies rejected
+  if (!isAnalyticsPermitted()) {
+    return;
+  }
+
   queue.push(activity);
 
   if (!flushTimer) {

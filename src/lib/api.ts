@@ -148,6 +148,8 @@ export const setAuthToken = (token: string | null): void => {
   }
 };
 
+import { checkTrafficLimit } from './trafficGuard';
+
 /**
  * Core fetch wrapper with JSON parsing and authentication headers
  */
@@ -155,6 +157,12 @@ async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
+  // Traffic rate limit check
+  const traffic = checkTrafficLimit();
+  if (!traffic.allowed) {
+    throw new Error(traffic.error || 'Traffic limit reached: Please slow down.');
+  }
+
   const url = `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
   
   const headers = new Headers(options.headers || {});

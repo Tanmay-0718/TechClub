@@ -1,5 +1,6 @@
 import { Linkedin, Instagram, Mail } from "lucide-react";
 import { Link } from "react-router-dom";
+import { openCookieSettings } from "@/components/CookieConsentBanner";
 
 const Footer = () => {
   return (
@@ -28,6 +29,7 @@ const Footer = () => {
               <li><Link to="/projects" className="text-foreground/40 hover:text-foreground active:scale-95 transition-[color,transform] duration-150 ease-emil-out inline-block">Projects</Link></li>
               <li><Link to="/events" className="text-foreground/40 hover:text-foreground active:scale-95 transition-[color,transform] duration-150 ease-emil-out inline-block">Events</Link></li>
               <li><a href="/#team" className="text-foreground/40 hover:text-foreground active:scale-95 transition-[color,transform] duration-150 ease-emil-out inline-block">Team</a></li>
+              <li><Link to="/privacy" className="text-foreground/40 hover:text-foreground active:scale-95 transition-[color,transform] duration-150 ease-emil-out inline-block">Privacy & Cookies</Link></li>
             </ul>
           </div>
 
@@ -67,6 +69,23 @@ const Footer = () => {
 
         {/* Bottom */}
         <div className="pt-8 border-t border-foreground/5 text-center space-y-4">
+          <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 text-xs font-light text-foreground/45">
+            <Link to="/privacy" className="hover:text-primary transition-colors">
+              Privacy Policy
+            </Link>
+            <span className="text-foreground/20">·</span>
+            <button
+              type="button"
+              onClick={openCookieSettings}
+              className="hover:text-primary transition-colors cursor-pointer inline-flex items-center gap-1.5"
+            >
+              <span>Cookie Settings</span>
+            </button>
+            <span className="text-foreground/20">·</span>
+            <Link to="/contact" className="hover:text-primary transition-colors">
+              Support & Contact
+            </Link>
+          </div>
           <p className="text-[10px] tracking-[0.3em] uppercase text-foreground/20 font-light">
             Building Uttarakhand's next generation of technologists and founders.
           </p>

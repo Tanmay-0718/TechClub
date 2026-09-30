@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"techshastra-backend/internal/database"
 	"techshastra-backend/internal/handlers"
@@ -142,8 +143,9 @@ func main() {
 	// Gallery
 	mux.HandleFunc("/api/gallery", handlers.GetGalleryHandler)
 
-	// 3. Wrap with Middleware
-	handler := middleware.EnableCORS(mux)
+	// 3. Wrap with Middleware (CORS + Rate Limiting traffic protection)
+	limiter := middleware.NewRateLimiter(60, 100, time.Minute)
+	handler := limiter.Limit(middleware.EnableCORS(mux))
 
 	log.Printf("TechShastra Go REST API Server listening on port :%s (http://localhost:%s)", port, port)
 	if err := http.ListenAndServe(":"+port, handler); err != nil {

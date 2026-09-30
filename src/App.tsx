@@ -33,6 +33,8 @@ import MemberEdit from "./pages/MemberEdit";
 import Members from "./pages/Members";
 import ProtectedRoute from "./components/ProtectedRoute";
 import ProtectedStudentRoute from "./components/ProtectedStudentRoute";
+import PrivacyPolicy from "./pages/PrivacyPolicy";
+import CookieConsentBanner from "./components/CookieConsentBanner";
 import { getStoredPageVisibility } from "./lib/adminStore";
 
 // Reads page visibility from localStorage; redirects to / if hidden by admin
@@ -52,15 +54,18 @@ const App = () => (
           <Toaster />
           <Sonner />
           <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-              <Routes>
-                <Route path="/" element={<Index />} />
-                <Route path="/about" element={<AboutPage />} />
-                <Route path="/join" element={<Join />} />
-                <Route path="/login" element={<Login />} />
-                <Route path="/signup" element={<Signup />} />
-                <Route path="/dashboard" element={<ProtectedRoute><UserDashboard /></ProtectedRoute>} />
-                <Route path="/profile" element={<ProtectedRoute><UserDashboard /></ProtectedRoute>} />
-                <Route path="/auth" element={<Auth />} />
+            <CookieConsentBanner />
+            <Routes>
+              <Route path="/" element={<Index />} />
+              <Route path="/about" element={<AboutPage />} />
+              <Route path="/join" element={<Join />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/signup" element={<Signup />} />
+              <Route path="/privacy" element={<PrivacyPolicy />} />
+              <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+              <Route path="/dashboard" element={<ProtectedRoute><UserDashboard /></ProtectedRoute>} />
+              <Route path="/profile" element={<ProtectedRoute><UserDashboard /></ProtectedRoute>} />
+              <Route path="/auth" element={<Auth />} />
 
                 <Route path="/projects" element={<PageGuard path="/projects"><Projects /></PageGuard>} />
               <Route path="/projects/:id" element={<PageGuard path="/projects"><ProjectDetail /></PageGuard>} />
