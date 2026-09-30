@@ -2,8 +2,10 @@ package middleware
 
 import (
 	"encoding/json"
+	"math"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -11,25 +13,30 @@ import (
 
 type visitor struct {
 	lastSeen time.Time
-	tokens   int
+	tokens   float64
 }
 
-// RateLimiter implements a token-bucket rate limiter per IP address.
+// RateLimiter implements a continuous linear-scaling token-bucket rate limiter per IP address.
 type RateLimiter struct {
 	mu       sync.Mutex
 	visitors map[string]*visitor
-	rate     int           // tokens added per interval
-	burst    int           // maximum burst capacity
-	interval time.Duration // replenishment interval
+	rate     float64 // tokens added per second linearly
+	burst    float64 // maximum burst capacity
 }
 
-// NewRateLimiter creates a new thread-safe rate limiter.
+// NewRateLimiter creates a new thread-safe linear-scaling rate limiter.
+// rate: number of tokens replenished over the given interval
+// burst: maximum burst capacity allowed at once
 func NewRateLimiter(rate, burst int, interval time.Duration) *RateLimiter {
+	tokensPerSecond := float64(rate) / interval.Seconds()
+	if tokensPerSecond <= 0 {
+		tokensPerSecond = 1.0
+	}
+
 	rl := &RateLimiter{
 		visitors: make(map[string]*visitor),
-		rate:     rate,
-		burst:    burst,
-		interval: interval,
+		rate:     tokensPerSecond,
+		burst:    float64(burst),
 	}
 
 	// Background routine to clean up stale visitors every 3 minutes
@@ -66,7 +73,7 @@ func getClientIP(r *http.Request) string {
 	return host
 }
 
-// Limit wraps an http.Handler with rate-limiting enforcement.
+// Limit wraps an http.Handler with continuous linear rate-limiting enforcement.
 func (rl *RateLimiter) Limit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := getClientIP(r)
@@ -76,38 +83,43 @@ func (rl *RateLimiter) Limit(next http.Handler) http.Handler {
 		now := time.Now()
 
 		if !exists {
-			rl.visitors[ip] = &visitor{lastSeen: now, tokens: rl.burst - 1}
+			rl.visitors[ip] = &visitor{lastSeen: now, tokens: rl.burst - 1.0}
 			rl.mu.Unlock()
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// Replenish tokens based on elapsed time
-		elapsed := now.Sub(v.lastSeen)
+		// Continuous linear scaling: replenish tokens linearly with time elapsed
+		elapsedSec := now.Sub(v.lastSeen).Seconds()
 		v.lastSeen = now
 
-		intervalsPassed := int(elapsed / rl.interval)
-		if intervalsPassed > 0 {
-			v.tokens += intervalsPassed * rl.rate
-			if v.tokens > rl.burst {
-				v.tokens = rl.burst
-			}
+		v.tokens += elapsedSec * rl.rate
+		if v.tokens > rl.burst {
+			v.tokens = rl.burst
 		}
 
-		if v.tokens <= 0 {
+		// Check if at least 1 token is available
+		if v.tokens < 1.0 {
+			// Calculate exact linear backoff delay required to recover 1 token
+			neededTokens := 1.0 - v.tokens
+			retrySec := int(math.Ceil(neededTokens / rl.rate))
+			if retrySec < 1 {
+				retrySec = 1
+			}
+
 			rl.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Retry-After", "10")
+			w.Header().Set("Retry-After", strconv.Itoa(retrySec))
 			w.WriteHeader(http.StatusTooManyRequests)
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"error":       "Traffic limit exceeded: Too many requests from your IP. Please slow down.",
-				"retry_after": 10,
+				"error":       "Traffic limit exceeded: Request rate too high. Please slow down.",
+				"retry_after": retrySec,
 				"success":     false,
 			})
 			return
 		}
 
-		v.tokens--
+		v.tokens -= 1.0
 		rl.mu.Unlock()
 
 		next.ServeHTTP(w, r)
